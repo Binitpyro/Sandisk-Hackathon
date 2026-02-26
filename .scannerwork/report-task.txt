@@ -1,0 +1,6 @@
+projectKey=pma_sandisk
+serverUrl=http://localhost:9000
+serverVersion=26.2.0.119303
+dashboardUrl=http://localhost:9000/dashboard?id=pma_sandisk
+ceTaskId=501a0ed3-1bcd-4281-8409-d5ca18f99c96
+ceTaskUrl=http://localhost:9000/api/ce/task?id=501a0ed3-1bcd-4281-8409-d5ca18f99c96

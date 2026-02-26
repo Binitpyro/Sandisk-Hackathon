@@ -179,3 +179,27 @@ cython_debug/
 #  refer to https://docs.cursor.com/context/ignore-files
 .cursorignore
 .cursorindexingignore
+
+# Local env & editor
+.venv/
+venv/
+.env
+*.env
+.vscode/
+.idea/
+*.log
+.DS_Store
+
+# SQLite databases
+*.sqlite
+*.sqlite3
+*.db
+
+# Chroma / vector store data (adjust if you use a different path)
+chroma/
+.chroma/
+vector_store/
+vector_store/chroma_db/
+
+# Jupyter etc (if you use them)
+.ipynb_checkpoints/
