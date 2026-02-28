@@ -1,0 +1,256 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Personal Memory Assistant</title>
+    <style>
+        :root { --primary: #2563eb; --bg: #f8fafc; --card: #ffffff; --text: #1e293b; --accent: #10b981; }
+        body { font-family: 'Inter', system-ui, sans-serif; background: var(--bg); color: var(--text); margin: 0; padding: 0; display: flex; flex-direction: column; min-height: 100vh; }
+        .container { max-width: 900px; margin: 0 auto; width: 100%; padding: 2rem; box-sizing: border-box; flex-grow: 1; }
+        header { background: var(--card); padding: 1.5rem 0; box-shadow: 0 1px 3px rgba(0,0,0,0.1); text-align: center; }
+        h1 { margin: 0; font-size: 1.5rem; display: flex; align-items: center; justify-content: center; gap: 0.5rem; }
+        
+        .tabs { display: flex; gap: 1rem; border-bottom: 1px solid #e2e8f0; margin-bottom: 2rem; padding: 0 1rem; }
+        .tab { padding: 0.75rem 1.5rem; cursor: pointer; border-bottom: 2px solid transparent; transition: all 0.2s; font-weight: 500; }
+        .tab.active { border-color: var(--primary); color: var(--primary); }
+        .tab:hover { background: #f1f5f9; }
+
+        .tab-content { display: none; background: var(--card); padding: 2rem; border-radius: 12px; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1); border: 1px solid #e2e8f0; }
+        .tab-content.active { display: block; animation: fadeIn 0.3s ease; }
+
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+
+        .input-group { display: flex; gap: 0.5rem; margin-bottom: 1.5rem; }
+        input, textarea { padding: 0.75rem; border: 1px solid #cbd5e1; border-radius: 8px; font-size: 1rem; width: 100%; box-sizing: border-box; }
+        button { padding: 0.75rem 1.5rem; background: var(--primary); color: white; border: none; border-radius: 8px; cursor: pointer; font-weight: 600; white-space: nowrap; transition: filter 0.2s; }
+        button:hover { filter: brightness(1.1); }
+        button:disabled { opacity: 0.6; cursor: not-allowed; }
+        .btn-secondary { background: #64748b; }
+        
+        .progress-container { background: #e2e8f0; border-radius: 99px; height: 12px; margin: 1rem 0; overflow: hidden; display: none; }
+        .progress-bar { height: 100%; background: var(--accent); width: 0%; transition: width 0.3s; }
+        
+        .answer-box { margin-top: 2rem; padding: 1.5rem; background: #f1f5f9; border-radius: 10px; border-left: 5px solid var(--primary); white-space: pre-wrap; line-height: 1.6; }
+        .sources { margin-top: 1.5rem; }
+        .source-item { padding: 1rem; border: 1px solid #e2e8f0; border-radius: 8px; margin-bottom: 0.75rem; background: #fff; }
+        .source-path { font-weight: bold; color: var(--primary); font-size: 0.9rem; }
+        .source-snippet { font-size: 0.85rem; color: #64748b; margin-top: 0.5rem; }
+
+        .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1.5rem; margin-bottom: 2rem; }
+        .stat-card { padding: 1.5rem; background: #f8fafc; border-radius: 10px; border: 1px solid #e2e8f0; text-align: center; }
+        .stat-value { font-size: 2rem; font-weight: bold; color: var(--primary); }
+        .stat-label { font-size: 0.875rem; color: #64748b; margin-top: 0.5rem; }
+
+        table { width: 100%; border-collapse: collapse; margin-top: 1rem; }
+        th, td { text-align: left; padding: 0.75rem; border-bottom: 1px solid #e2e8f0; }
+        th { background: #f8fafc; font-size: 0.875rem; color: #64748b; }
+    </style>
+</head>
+<body>
+    <header>
+        <h1>🧠 Personal Memory Assistant</h1>
+    </header>
+
+    <div class="tabs">
+        <div class="tab active" onclick="switchTab('index-tab')">Index</div>
+        <div class="tab" onclick="switchTab('ask-tab')">Ask</div>
+        <div class="tab" onclick="switchTab('insights-tab'); fetchInsights();">Insights</div>
+    </div>
+
+    <div class="container">
+        <!-- Index Tab -->
+        <div id="index-tab" class="tab-content active">
+            <h2>Add Folders to Memory</h2>
+            <p>Paste absolute paths to local folders you want to index.</p>
+            <div class="input-group">
+                <input type="text" id="folders" placeholder="e.g. C:/Users/Name/Documents">
+                <button onclick="startIndexing()">Index Folders</button>
+            </div>
+            
+            <div class="progress-container" id="progress-container">
+                <div class="progress-bar" id="progress-bar"></div>
+            </div>
+            <p id="status-text">Status: Checking...</p>
+            
+            <hr style="margin: 2rem 0; border: none; border-top: 1px solid #e2e8f0;">
+            <h3>Quick Start</h3>
+            <button class="btn-secondary" onclick="seedDemo()">Seed Demo Data & Index</button>
+        </div>
+
+        <!-- Ask Tab -->
+        <div id="ask-tab" class="tab-content">
+            <h2>Search Your Second Memory</h2>
+            <div class="input-group" style="flex-direction: column;">
+                <textarea id="question" placeholder="e.g. What feedback did I get on my OS project?"></textarea>
+                <button id="ask-btn" onclick="askQuestion()">Ask Question</button>
+            </div>
+            
+            <div id="results-container" style="display: none;">
+                <h3>Answer</h3>
+                <div class="answer-box" id="answer-text"></div>
+                <div class="sources">
+                    <h4>Cited Sources</h4>
+                    <div id="sources-list"></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Insights Tab -->
+        <div id="insights-tab" class="tab-content">
+            <h2>Memory Insights</h2>
+            <div class="stats-grid">
+                <div class="stat-card">
+                    <div class="stat-value" id="stat-files">0</div>
+                    <div class="stat-label">Files Indexed</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value" id="stat-size">0 MB</div>
+                    <div class="stat-label">Total Storage</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value" id="stat-chunks">0</div>
+                    <div class="stat-label">Text Chunks</div>
+                </div>
+            </div>
+
+            <h3>Largest Files</h3>
+            <table id="top-files-table">
+                <thead><tr><th>Path</th><th>Size (KB)</th></tr></thead>
+                <tbody></tbody>
+            </table>
+
+            <h3 style="margin-top: 2rem;">"Cold" Files (Never Used in Queries)</h3>
+            <table id="cold-files-table">
+                <thead><tr><th>Path</th><th>Size (KB)</th></tr></thead>
+                <tbody></tbody>
+            </table>
+        </div>
+    </div>
+
+    <script>
+        function switchTab(tabId) {
+            document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+            document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+            document.getElementById(tabId).classList.add('active');
+            event.currentTarget.classList.add('active');
+        }
+
+        async function startIndexing() {
+            const input = document.getElementById('folders').value;
+            // Strip quotes and whitespace from each folder
+            const folders = input.split(',').map(f => f.trim().replace(/^["'](.+)["']$/, '$1')).filter(f => f);
+            if(!folders.length) return alert("Enter folder path");
+            
+            const btn = document.querySelector('#index-tab button');
+            btn.disabled = true;
+            btn.innerText = "Indexing Started...";
+
+            await fetch('/index/start', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({folders})
+            });
+            pollStatus();
+        }
+
+        async function seedDemo() {
+            const btn = document.querySelector('.btn-secondary');
+            btn.disabled = true;
+            const res = await fetch('/demo/seed', {method: 'POST'});
+            const data = await res.json();
+            alert(data.message);
+            document.getElementById('folders').value = data.folder;
+            pollStatus();
+        }
+
+        async function pollStatus() {
+            const res = await fetch('/index/status');
+            const data = await res.json();
+            
+            const progressContainer = document.getElementById('progress-container');
+            const progressBar = document.getElementById('progress-bar');
+            const statusText = document.getElementById('status-text');
+            const indexBtn = document.querySelector('#index-tab button');
+            const seedBtn = document.querySelector('.btn-secondary');
+
+            statusText.innerText = `Status: ${data.status} | Files: ${data.files_indexed} | Chunks: ${data.chunks_indexed}`;
+            
+            if(data.status === 'running') {
+                progressContainer.style.display = 'block';
+                progressBar.style.width = data.progress_percent + '%';
+                indexBtn.disabled = true;
+                indexBtn.innerText = "Indexing (" + data.progress_percent + "%)...";
+                seedBtn.disabled = true;
+                setTimeout(pollStatus, 1000);
+            } else {
+                if (data.progress_percent === 100 || data.status === 'idle') {
+                    progressBar.style.width = '100%';
+                    indexBtn.disabled = false;
+                    indexBtn.innerText = "Index Folders";
+                    seedBtn.disabled = false;
+                }
+            }
+        }
+
+        async function askQuestion() {
+            const question = document.getElementById('question').value;
+            if(!question) return;
+            
+            const btn = document.getElementById('ask-btn');
+            btn.disabled = true;
+            btn.innerText = "Processing...";
+            
+            try {
+                const res = await fetch('/query', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({question})
+                });
+                const data = await res.json();
+                
+                document.getElementById('results-container').style.display = 'block';
+                document.getElementById('answer-text').innerText = data.answer;
+                
+                const sourcesList = document.getElementById('sources-list');
+                sourcesList.innerHTML = '';
+                data.sources.forEach(s => {
+                    const div = document.createElement('div');
+                    div.className = 'source-item';
+                    div.innerHTML = `<div class="source-path">${s.file_path}</div>
+                                     <div class="source-snippet">${s.snippet}</div>`;
+                    sourcesList.appendChild(div);
+                });
+            } catch(e) { alert("Error!"); }
+            finally { btn.disabled = false; btn.innerText = "Ask Question"; }
+        }
+
+        async function fetchInsights() {
+            const res = await fetch('/insights');
+            const data = await res.json();
+            
+            document.getElementById('stat-files').innerText = data.file_count;
+            document.getElementById('stat-size').innerText = (data.total_size_bytes / (1024*1024)).toFixed(2) + ' MB';
+            
+            const statusRes = await fetch('/index/status');
+            const statusData = await statusRes.json();
+            document.getElementById('stat-chunks').innerText = statusData.chunks_indexed;
+
+            const updateTable = (id, list) => {
+                const tbody = document.querySelector(`#${id} tbody`);
+                tbody.innerHTML = '';
+                list.forEach(f => {
+                    const tr = document.createElement('tr');
+                    tr.innerHTML = `<td>${f.path}</td><td>${(f.size/1024).toFixed(1)}</td>`;
+                    tbody.appendChild(tr);
+                });
+            };
+            
+            updateTable('top-files-table', data.top_files);
+            updateTable('cold-files-table', data.cold_files);
+        }
+
+        pollStatus();
+    </script>
+</body>
+</html>

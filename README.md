@@ -1,32 +1,51 @@
-# Personal Memory Assistant
+# Personal Memory Assistant 🧠
 
-A local‑first Personal Memory Assistant that helps users rediscover their own work.
+A local-first Personal Memory Assistant that helps you rediscover your own work across files (TXT, MD, PDF).
 
-Most people have documents, PDFs, source code and project reports scattered across laptops, external drives and random folders. When they later need something like “my feedback for my operating systems project” or “the PDF for my internship offer”, they end up clicking through directories or trying to remember file names.
+Built with **Python 3.12**, **FastAPI**, **SQLite (FTS5)**, **ChromaDB**, and **Sentence-Transformers**.
 
-This project indexes the user’s chosen folders once, keeps that index up to date, and lets the user ask natural‑language questions over their own files. The goal is to let users treat their local storage as a “second memory”.
+## Features
 
-## Tech Stack
+- **Hybrid Search**: Combines keyword search (FTS5) and semantic search (Vector) for better results.
+- **Local-First**: All metadata and embeddings are stored on your machine.
+- **LLM-Powered Answers**: Uses Gemini 1.5 Flash (or local Ollama) to generate natural language answers with citations.
+- **Storage Insights**: Identify "cold" files that take up space but haven't been relevant to your queries.
+- **Modern UI**: Clean, tabbed interface for indexing, querying, and insights.
 
-- **Backend:** Python 3.12 + FastAPI
-- **Server:** Uvicorn (ASGI)
-- **Storage:**
-  - SQLite (+ FTS5) for metadata and keyword search
-  - Chroma (on‑disk) for vector search
-- **ML:**
-  - `sentence-transformers` for local embeddings
-  - Pluggable LLM (local or cloud) for answer generation
-- **UI:** Simple HTML/JS served by FastAPI
+## Quick Start
 
-## Running (placeholder)
-
+### 1. Setup Environment
 ```bash
 python -m venv .venv
-.venv\Scripts\activate  # Windows
+source .venv/bin/activate  # Linux/macOS
+.venv\Scripts\activate     # Windows
 
 pip install -r requirements.txt
-
-uvicorn app.main:app --reload
 ```
 
-See `docs/ARCHITECTURE.md` and `docs/IMPLEMENTATION_PLAN.md` for design and plan.
+### 2. Configure LLM (Optional but Recommended)
+Create a `.env` file in the root directory:
+```env
+GEMINI_API_KEY=your_api_key_here
+```
+*If no key is provided, the app will attempt to fallback to a local Ollama instance at `http://localhost:11434`.*
+
+### 3. Run the App
+```bash
+uvicorn app.main:app --reload
+```
+Visit `http://localhost:8000` in your browser.
+
+## How to Use
+
+1. **Index**: Go to the **Index** tab. You can paste absolute folder paths or click **Seed Demo Data** to quickly generate and index sample files.
+2. **Ask**: Go to the **Ask** tab. Type a question like "What feedback did I get on my project?" or "When does my internship start?".
+3. **Insights**: Visit the **Insights** tab to see your storage breakdown and find files that are rarely used.
+
+## Architecture
+
+- **Backend**: FastAPI (Python)
+- **Metadata**: SQLite with FTS5 for lightning-fast keyword searches.
+- **Vector Store**: ChromaDB for semantic embeddings.
+- **Embeddings**: Local `all-MiniLM-L6-v2` (Sentence-Transformers).
+- **RAG Engine**: Reciprocal Rank Fusion (RRF) to merge keyword and semantic results.

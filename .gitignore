@@ -190,10 +190,11 @@ venv/
 *.log
 .DS_Store
 
-# SQLite databases
-*.sqlite
-*.sqlite3
-*.db
+# App Data / Persistence
+pma_metadata.db
+chroma_db/
+demo_data/
+.env
 
 # Chroma / vector store data (adjust if you use a different path)
 chroma/
@@ -203,3 +204,8 @@ vector_store/chroma_db/
 
 # Jupyter etc (if you use them)
 .ipynb_checkpoints/
+
+# Hackathon local/private files
+docs/
+personal help/
+GEMINI.md
