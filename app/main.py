@@ -1,68 +1,72 @@
-from fastapi import FastAPI, Request, BackgroundTasks, Depends
-from fastapi.responses import HTMLResponse, JSONResponse
-from fastapi.staticfiles import StaticFiles
-from fastapi.templating import Jinja2Templates
-from fastapi.exceptions import RequestValidationError
-from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field
-from typing import List, Optional
-from contextlib import asynccontextmanager
-from sse_starlette.sse import EventSourceResponse
-import asyncio
-import json
-import os
-import time
-import logging
-from pathlib import Path
+"""
+Main FastAPI application module for Personal Memory Assistant.
+Handles API routing, dependency injection, and lifespan events.
+"""
 
-from app.config import settings
-from app.storage.db import DatabaseManager
+import asyncio
+import ctypes
+import json
+import logging
+import os
 import platform as plat
 import shutil
 import string
+import time
+import tkinter as tk
+import uuid
+from contextlib import asynccontextmanager
+from pathlib import Path
+from tkinter import filedialog
+from typing import Any, List, Optional, Tuple
 
-# Lazy imports – these pull in heavy deps (torch, chromadb, sentence-transformers)
-# and are deferred so the server socket binds fast.
-from typing import Any, Tuple, Callable
+from fastapi import BackgroundTasks, Depends, FastAPI, Request
+from fastapi.exceptions import RequestValidationError
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
+from fastapi.templating import Jinja2Templates
+from pydantic import BaseModel, Field
+from sse_starlette.sse import EventSourceResponse
 
-_IndexingService: Any = None
-_progress: Any = None
-_full_rag: Any = None
-_InsightsService: Any = None
+from app.config import settings
+from app.storage.db import DatabaseManager
+
+_indexing_service_cls: Any = None
+_progress_obj: Any = None
+_full_rag_func: Any = None
+_insights_service_cls: Any = None
 
 def _ensure_indexing() -> Tuple[Any, Any]:
-    global _IndexingService, _progress
-    if _IndexingService is None:
-        from app.indexing.service import IndexingService as _IS, progress as _p
-        _IndexingService = _IS
-        _progress = _p
-    return _IndexingService, _progress
+    global _indexing_service_cls, _progress_obj
+    if _indexing_service_cls is None:
+        from app.indexing.service import IndexingService as _IS
+        from app.indexing.service import progress as _p
+        _indexing_service_cls = _IS
+        _progress_obj = _p
+    return _indexing_service_cls, _progress_obj
 
 def _ensure_rag():
-    global _full_rag
-    if _full_rag is None:
+    global _full_rag_func
+    if _full_rag_func is None:
         from app.search.retrieval import full_rag as _fr
-        _full_rag = _fr
-    return _full_rag
+        _full_rag_func = _fr
+    return _full_rag_func
 
 def _ensure_insights():
-    global _InsightsService
-    if _InsightsService is None:
+    global _insights_service_cls
+    if _insights_service_cls is None:
         from app.insights.service import InsightsService as _IS
-        _InsightsService = _IS
-    return _InsightsService
+        _insights_service_cls = _IS
+    return _insights_service_cls
 
-# Configure logging
 logging.basicConfig(
     level=getattr(logging, settings.log_level.upper(), logging.INFO),
     format="%(asctime)s  %(levelname)-8s  %(name)s  %(message)s",
 )
 logger = logging.getLogger(__name__)
 
-# Global state – lightweight constructors, heavy work deferred to lifespan
 db_manager = DatabaseManager(db_path=settings.db_path)
 
-# Lazy-created so importing this module doesn't pull in torch/chromadb
 _embedding_service = None
 _chroma_client = None
 _llm_client = None
@@ -88,34 +92,28 @@ def _get_llm_client():
         _llm_client = LLMClient()
     return _llm_client
 
-
 @asynccontextmanager
-async def lifespan(app: FastAPI):
+async def lifespan(fastapi_app: FastAPI):
     loop = asyncio.get_running_loop()
 
-    # 1. Init DB (async, fast)
     logger.info("Initializing database...")
     await db_manager.init_db(schema_path=settings.schema_path)
 
-    # 2. Start embedding model load in background thread (biggest bottleneck)
     emb = _get_embedding_service()
     logger.info("Starting background model load...")
     emb.load_model_background()
 
-    # 3. Connect Chroma in executor (I/O-bound, ~0.4s)
     chroma = _get_chroma_client()
     logger.info("Initializing Chroma...")
     await loop.run_in_executor(None, chroma.connect)
 
     logger.info("Server ready  (model loading in background)")
     yield
-    # Cleanup
     logger.info("Shutting down...")
     await db_manager.close()
 
 app = FastAPI(title="Personal Memory Assistant", lifespan=lifespan)
 
-# ── CORS middleware ──────────────────────────────────────────────────────
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:8000", "http://127.0.0.1:8000"],
@@ -123,9 +121,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-# ── Request ID middleware for observability ───────────────────────────────
-import uuid
 
 @app.middleware("http")
 async def add_request_id(request: Request, call_next):
@@ -143,9 +138,8 @@ async def add_request_id(request: Request, call_next):
         )
     return response
 
-# ── Global error handlers ────────────────────────────────────────────────
 @app.exception_handler(RequestValidationError)
-async def validation_exception_handler(request: Request, exc: RequestValidationError):
+async def validation_exception_handler(_request: Request, exc: RequestValidationError):
     errors = exc.errors()
     messages = []
     for err in errors:
@@ -164,17 +158,21 @@ async def global_exception_handler(request: Request, exc: Exception):
         content={"error": "An internal server error occurred. Please try again later."},
     )
 
-# Mount static files and templates
 app.mount("/static", StaticFiles(directory="static"), name="static")
 templates = Jinja2Templates(directory="templates")
 
-# Dependencies
-def get_db(): return db_manager
-def get_emb(): return _get_embedding_service()
-def get_chroma(): return _get_chroma_client()
-def get_llm(): return _get_llm_client()
+def get_db():
+    return db_manager
 
-# Models
+def get_emb():
+    return _get_embedding_service()
+
+def get_chroma():
+    return _get_chroma_client()
+
+def get_llm():
+    return _get_llm_client()
+
 class IndexRequest(BaseModel):
     folders: List[str] = Field(..., max_length=50)
 
@@ -186,7 +184,6 @@ class IndexRequest(BaseModel):
             p = f.strip().strip('"').strip("'")
             if not p:
                 continue
-            # Normalise and resolve to prevent path traversal
             resolved = os.path.realpath(os.path.normpath(p))
             if os.path.isdir(resolved):
                 cleaned.append(resolved)
@@ -221,8 +218,8 @@ async def read_root(request: Request):
 
 @app.post("/index/start")
 async def index_start(
-    request: IndexRequest, 
-    background_tasks: BackgroundTasks, 
+    request: IndexRequest,
+    background_tasks: BackgroundTasks,
     db: DatabaseManager = Depends(get_db),
     emb=Depends(get_emb),
     chroma=Depends(get_chroma)
@@ -230,8 +227,8 @@ async def index_start(
     folders = request.validated_folders
     if not folders:
         return JSONResponse(status_code=400, content={"error": "No valid folder paths provided."})
-    IndexingService, _ = _ensure_indexing()
-    service = IndexingService(db, emb, chroma)
+    indexing_service_cls, _ = _ensure_indexing()
+    service = indexing_service_cls(db, emb, chroma)
     background_tasks.add_task(service.index_folders, folders)
     return JSONResponse(status_code=202, content={"message": "Indexing started"})
 
@@ -244,11 +241,11 @@ async def index_status(db: DatabaseManager = Depends(get_db)):
         file_count, chunk_count = await db.get_counts()
     except Exception as e:
         logger.warning("Could not fetch index counts: %s", e)
-    
+
     percentage = 0
     if progress.total_files > 0:
         percentage = int((progress.processed_files / progress.total_files) * 100)
-        
+
     return {
         "status": progress.status,
         "files_indexed": file_count,
@@ -272,7 +269,7 @@ async def query(
     question = request.validated_question
     if not question:
         return JSONResponse(status_code=400, content={"error": "Question cannot be empty."})
-    
+
     try:
         full_rag = _ensure_rag()
         results = await full_rag(
@@ -287,8 +284,7 @@ async def query(
     except Exception as e:
         logger.error("Query failed: %s", e)
         return JSONResponse(status_code=500, content={"error": "An error occurred while processing your query."})
-    
-    # Track usage for insights (batched commit)
+
     source_paths = [res["file_path"] for res in results.get("sources", [])]
     if source_paths:
         try:
@@ -296,7 +292,6 @@ async def query(
         except Exception as e:
             logger.warning("Failed to increment usage counts: %s", e)
 
-    # Save to query history
     try:
         await db.save_query(
             question=question,
@@ -306,13 +301,13 @@ async def query(
         )
     except Exception as e:
         logger.warning("Failed to save query history: %s", e)
-        
+
     return results
 
 @app.get("/insights")
 async def get_insights(db: DatabaseManager = Depends(get_db)):
-    InsightsService = _ensure_insights()
-    insights_svc = InsightsService(db)
+    insights_service_cls = _ensure_insights()
+    insights_svc = insights_service_cls(db)
     stats = await insights_svc.get_stats()
     return stats
 
@@ -343,8 +338,6 @@ async def get_files_tree(db: DatabaseManager = Depends(get_db)):
 async def pick_folder():
     """Opens a native OS folder picker dialog and returns the selected path."""
     def _dialog():
-        import tkinter as tk
-        from tkinter import filedialog
         root = tk.Tk()
         try:
             root.withdraw()
@@ -365,8 +358,6 @@ async def pick_folder():
 async def pick_file():
     """Opens a native OS file picker dialog (multi-select) and returns paths."""
     def _dialog():
-        import tkinter as tk
-        from tkinter import filedialog
         root = tk.Tk()
         try:
             root.withdraw()
@@ -393,13 +384,12 @@ async def get_system_info():
         "volumes": [],
     }
     if plat.system() == "Windows":
-        import ctypes
         try:
             info["is_admin"] = bool(ctypes.windll.shell32.IsUserAnAdmin())
             if info["is_admin"]:
                 info["scan_method"] = "ntfs_mft"
-        except Exception:
-            pass
+        except Exception:  # noqa: S110 – non-critical admin check
+            logger.debug("Could not determine admin status")
         for letter in string.ascii_uppercase:
             drive = f"{letter}:\\"
             if os.path.exists(drive):
@@ -411,8 +401,8 @@ async def get_system_info():
                         "free_gb": round(free / (1024 ** 3), 1),
                         "used_gb": round(used / (1024 ** 3), 1),
                     })
-                except Exception:
-                    pass
+                except OSError as exc:
+                    logger.debug("Could not read disk usage for %s: %s", drive, exc)
     return info
 
 @app.post("/demo/seed")
@@ -423,7 +413,7 @@ async def seed_demo(
     chroma=Depends(get_chroma)
 ):
     """Creates some demo files and kicks off indexing.
-    
+
     Only available when PMA_DEV_MODE=1 or when no files are indexed yet.
     """
     dev_mode = settings.dev_mode
@@ -435,7 +425,7 @@ async def seed_demo(
         )
     demo_dir = Path("demo_data")
     demo_dir.mkdir(exist_ok=True)
-    
+
     (demo_dir / "OS_project_feedback.txt").write_text(
         "TA Feedback on OS Project: The process scheduler implementation is correct, but your error handling in the fork system call needs improvement. 0.92/1.0",
         encoding="utf-8"
@@ -448,21 +438,17 @@ async def seed_demo(
         "## Python Performance\nUse lists comprehensions instead of maps for small datasets. Always close DB connections.",
         encoding="utf-8"
     )
-    
-    # Trigger indexing
-    IndexingService, _ = _ensure_indexing()
-    service = IndexingService(db, emb, chroma)
+
+    indexing_service_cls, _ = _ensure_indexing()
+    service = indexing_service_cls(db, emb, chroma)
     background_tasks.add_task(service.index_folders, [str(demo_dir.absolute())])
-    
+
     return {"message": "Demo files created and indexing started.", "folder": str(demo_dir.absolute())}
-
-
-# ── SSE real-time progress stream ────────────────────────────────────────
 
 @app.get("/index/progress-stream")
 async def progress_stream():
     """Server-Sent Events endpoint for real-time indexing progress.
-    
+
     The frontend connects to this with EventSource and receives
     JSON progress updates every 500ms while indexing is active.
     """
@@ -487,9 +473,7 @@ async def progress_stream():
             }
             yield {"event": "progress", "data": json.dumps(data)}
 
-            # Stop streaming once indexing is complete
             if progress.status != "running":
-                # Send one final update
                 data["status"] = "idle"
                 yield {"event": "progress", "data": json.dumps(data)}
                 break
@@ -497,9 +481,6 @@ async def progress_stream():
             await asyncio.sleep(0.5)
 
     return EventSourceResponse(event_generator())
-
-
-# ── Query history ────────────────────────────────────────────────────────
 
 @app.get("/query/history")
 async def query_history(
@@ -514,9 +495,6 @@ async def query_history(
         logger.warning("Failed to load query history: %s", e)
         return {"history": []}
 
-
-# ── Clear entire database ────────────────────────────────────────────────
-
 @app.post("/index/clear")
 async def clear_database(
     db: DatabaseManager = Depends(get_db),
@@ -526,19 +504,14 @@ async def clear_database(
     try:
         counts = await db.clear_all()
         await chroma.clear_all()
-        # Reset in-memory progress
         _, progress = _ensure_indexing()
         progress.reset(0)
         progress.status = "idle"
         logger.info("Database fully cleared by user.")
         return counts
     except Exception as e:
-        import traceback
-        logger.error("Clear database failed: %s\n%s", e, traceback.format_exc())
-        return JSONResponse(status_code=500, content={"error": f"Failed to clear database: {e}"})
-
-
-# ── Index cleanup ────────────────────────────────────────────────────────
+        logger.error("Clear database failed: %s", e, exc_info=True)
+        return JSONResponse(status_code=500, content={"error": "Failed to clear database. Please check server logs."})
 
 @app.post("/index/cleanup")
 async def cleanup_stale(db: DatabaseManager = Depends(get_db)):
@@ -553,9 +526,6 @@ async def cleanup_stale(db: DatabaseManager = Depends(get_db)):
         logger.error("Cleanup failed: %s", e)
         return JSONResponse(status_code=500, content={"error": "Cleanup failed."})
 
-
-# ── Re-index (force) ────────────────────────────────────────────────────
-
 @app.post("/index/reindex")
 async def force_reindex(
     request: IndexRequest,
@@ -565,32 +535,23 @@ async def force_reindex(
     chroma=Depends(get_chroma),
 ):
     """Force re-index folders, ignoring change detection.
-    
+
     Deletes existing entries for the specified folders first.
     """
     folders = request.validated_folders
     if not folders:
         return JSONResponse(status_code=400, content={"error": "No valid folder paths provided."})
 
-    # Delete existing file entries for these folders
     for folder in folders:
         try:
-            conn = db._get_conn()
-            await conn.execute(
-                "DELETE FROM files WHERE path LIKE ?",
-                (folder + "%",),
-            )
-            await conn.commit()
+            await db.delete_files_by_folder_prefix(folder)
         except Exception as e:
             logger.warning("Failed to clean folder %s before re-index: %s", folder, e)
 
-    IndexingService, _ = _ensure_indexing()
-    service = IndexingService(db, emb, chroma)
+    indexing_service_cls, _ = _ensure_indexing()
+    service = indexing_service_cls(db, emb, chroma)
     background_tasks.add_task(service.index_folders, folders)
     return JSONResponse(status_code=202, content={"message": "Re-indexing started (change detection bypassed)"})
-
-
-# ── Export ───────────────────────────────────────────────────────────────
 
 @app.get("/index/export")
 async def export_index(db: DatabaseManager = Depends(get_db)):
@@ -616,7 +577,6 @@ async def export_index(db: DatabaseManager = Depends(get_db)):
     except Exception as e:
         logger.error("Export failed: %s", e)
         return JSONResponse(status_code=500, content={"error": "Export failed."})
-
 
 if __name__ == "__main__":
     import uvicorn

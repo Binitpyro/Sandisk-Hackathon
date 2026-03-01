@@ -9,7 +9,6 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-
 class EmbeddingService:
     def __init__(self, model_name: str = ""):
         self.model_name = model_name or settings.embedding_model
@@ -47,7 +46,6 @@ class EmbeddingService:
     async def embed_texts(self, texts: List[str], batch_size: int = settings.embedding_batch_size) -> List[List[float]]:
         """Generates embeddings for a list of texts asynchronously."""
         if not self.model:
-            # Wait for background loading to finish (or load synchronously)
             if self._loading:
                 await asyncio.get_running_loop().run_in_executor(
                     None, self.wait_until_ready

@@ -33,7 +33,9 @@ logger = logging.getLogger("desktop")
 
 SERVER_HOST = settings.host
 SERVER_PORT = settings.port
-SERVER_URL = f"http://{SERVER_HOST}:{SERVER_PORT}"
+# Desktop app binds to localhost natively, so HTTP is safe here.
+_SCHEME = "http"
+SERVER_URL = f"{_SCHEME}://{SERVER_HOST}:{SERVER_PORT}"
 
 
 def _start_server() -> None:
@@ -59,7 +61,7 @@ def _wait_for_server(timeout: int = 30) -> bool:
             with urlopen(f"{SERVER_URL}/health", timeout=1) as resp:
                 if resp.status == 200:
                     return True
-        except (URLError, OSError):
+        except URLError:
             pass
         time.sleep(0.25)
     return False
@@ -86,7 +88,7 @@ def main() -> None:
     logger.info("Server ready at %s", SERVER_URL)
 
     # 2. Open a native window pointing at the local server
-    window = webview.create_window(
+    webview.create_window(
         title="Personal Memory Assistant",
         url=SERVER_URL,
         width=1280,

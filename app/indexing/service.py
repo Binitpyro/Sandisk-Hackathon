@@ -2,6 +2,7 @@ import os
 import logging
 import asyncio
 import threading
+import concurrent.futures
 from pathlib import Path
 from datetime import datetime
 from typing import List, Dict, Any, Optional, Set, Tuple
@@ -12,7 +13,6 @@ from app.scanner.scanner import scan_folder as fast_scan
 from app.config import settings
 
 logger = logging.getLogger(__name__)
-
 
 def _resolve_folder_overlaps(folders: List[str]) -> List[Path]:
     """Remove child folders whose content is already covered by a parent.
@@ -28,12 +28,10 @@ def _resolve_folder_overlaps(folders: List[str]) -> List[Path]:
             continue
         resolved.append(p)
 
-    # Sort by depth (shortest first) so parents come before children
     resolved.sort(key=lambda p: len(p.parts))
 
     kept: List[Path] = []
     for candidate in resolved:
-        # Check if any already-kept folder is a parent of this candidate
         dominated = False
         for parent in kept:
             try:
@@ -49,7 +47,6 @@ def _resolve_folder_overlaps(folders: List[str]) -> List[Path]:
         if not dominated:
             kept.append(candidate)
     return kept
-
 
 class IndexingProgress:
     """Thread-safe progress tracker for the indexing pipeline."""
@@ -91,7 +88,6 @@ class IndexingProgress:
             self.status = "idle"
             self.current_file = ""
 
-# Global progress tracker and lock
 progress = IndexingProgress()
 indexing_lock = asyncio.Lock()
 
@@ -129,7 +125,6 @@ class IndexingService:
             return
 
         async with indexing_lock:
-            # ── 1. Resolve folder overlaps ───────────────────────────────
             unique_folders = _resolve_folder_overlaps(folders)
             if not unique_folders:
                 logger.warning("No valid folders to index after overlap resolution.")
@@ -142,22 +137,15 @@ class IndexingService:
                 [str(f) for f in unique_folders],
             )
 
-            # ── 2. Scan for candidate files ──────────────────────────────
-            all_files: List[Tuple[Path, str]] = []
-            seen_paths: Set[str] = set()  # dedup across scan results
-            scan_method = ""
-            scan_duration = 0.0
+            # Set status to 'running' before scan so SSE stream stays open
+            progress.reset(0)
+            progress.status = "running"
+            progress.current_file = "Scanning folders…"
 
-            for path in unique_folders:
-                scan_result = fast_scan(path, self.supported_extensions)
-                scan_method = scan_result.method
-                scan_duration += scan_result.duration_ms
-
-                for file_path in scan_result.files:
-                    abs_key = str(file_path.resolve())
-                    if abs_key not in seen_paths:
-                        seen_paths.add(abs_key)
-                        all_files.append((file_path, path.name))
+            loop = asyncio.get_running_loop()
+            all_files, scan_method, scan_duration = await loop.run_in_executor(
+                None, self._scan_all_folders, unique_folders
+            )
 
             if not all_files:
                 logger.info(
@@ -168,49 +156,10 @@ class IndexingService:
                 progress.status = "idle"
                 return
 
-            # ── 3. Batch change detection ────────────────────────────────
-            file_paths_list = [str(fp.absolute()) for fp, _ in all_files]
-            indexed_map = await self.db.get_files_modified_map(file_paths_list)
-
-            files_to_index: List[Tuple[Path, str]] = []
-            skipped = 0
-            new_count = 0
-            changed_count = 0
-
-            for file_path, folder_tag in all_files:
-                abs_path = str(file_path.absolute())
-                try:
-                    current_mtime = datetime.fromtimestamp(
-                        file_path.stat().st_mtime
-                    ).isoformat()
-                except OSError:
-                    # File vanished between scan and check — skip
-                    skipped += 1
-                    continue
-
-                stored_mtime = indexed_map.get(abs_path)
-                if stored_mtime is not None and stored_mtime == current_mtime:
-                    # Unchanged — skip entirely
-                    skipped += 1
-                    continue
-
-                if stored_mtime is None:
-                    new_count += 1
-                else:
-                    changed_count += 1
-                files_to_index.append((file_path, folder_tag))
-
-            logger.info(
-                "Change detection: %d scanned → %d to index "
-                "(%d new, %d changed, %d unchanged/skipped).",
-                len(all_files),
-                len(files_to_index),
-                new_count,
-                changed_count,
-                skipped,
+            files_to_index, skipped, new_count, changed_count = await self._detect_changes(
+                all_files
             )
 
-            # Progress tracks only files that actually need work
             progress.reset(len(files_to_index))
             progress.scan_method = scan_method
             progress.scan_duration_ms = scan_duration
@@ -223,18 +172,7 @@ class IndexingService:
                 progress.complete()
                 return
 
-            # ── 4. Index only new / changed files (with bounded concurrency) ──
-            sem = asyncio.Semaphore(self._concurrency)
-
-            async def _index_with_sem(fp: Path, ft: str):
-                async with sem:
-                    await self.index_file(fp, ft)
-
-            tasks = [
-                _index_with_sem(file_path, folder_tag)
-                for file_path, folder_tag in files_to_index
-            ]
-            await asyncio.gather(*tasks)
+            await self._batch_index_pipeline(files_to_index)
 
             progress.complete()
             logger.info(
@@ -242,6 +180,268 @@ class IndexingService:
                 len(files_to_index),
                 skipped,
             )
+
+    # ------------------------------------------------------------------ #
+    #  Three-phase batch pipeline (extract → embed → store)              #
+    # ------------------------------------------------------------------ #
+
+    async def _batch_index_pipeline(
+        self, files_to_index: List[Tuple[Path, str]]
+    ) -> None:
+        """Optimised pipeline that batches work across *all* files.
+
+        Phase 1 – **Parallel text extraction + chunking** (I/O-bound,
+                  runs in a ThreadPoolExecutor so PDF/DOCX parsing
+                  doesn't block the event loop).
+        Phase 2 – **Batch embedding** of every chunk + summary in one
+                  call to ``SentenceTransformer.encode``.  This is the
+                  single biggest speed-up: the model processes a large
+                  matrix in one GPU/CPU pass instead of many small ones.
+        Phase 3 – **Batch storage** into SQLite + ChromaDB.
+        """
+        total = len(files_to_index)
+
+        # ── Phase 1: parallel extract + chunk ──────────────────────────
+        logger.info("Pipeline phase 1/3: extracting text from %d files …", total)
+        max_workers = min(self._concurrency * 2, (os.cpu_count() or 4) + 2)
+        loop = asyncio.get_running_loop()
+
+        prepared: List[Dict[str, Any]] = []
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as pool:
+            futs = [
+                loop.run_in_executor(pool, self._extract_and_prepare, fp, ft)
+                for fp, ft in files_to_index
+            ]
+            results = await asyncio.gather(*futs, return_exceptions=True)
+
+        for (fp, _ft), result in zip(files_to_index, results):
+            if isinstance(result, Exception):
+                logger.error("Error extracting %s: %s", fp, result)
+                progress.update(0, fp.name)
+                continue
+            if result is None:
+                progress.update(0, fp.name)
+                continue
+            prepared.append(result)
+
+        if not prepared:
+            return
+
+        # ── Phase 2: batch embed ALL texts at once ─────────────────────
+        all_texts: List[str] = []
+        text_map: List[Tuple[int, str, int]] = []  # (file_idx, kind, sub_idx)
+
+        for fi, item in enumerate(prepared):
+            for ci, chunk in enumerate(item["chunks"]):
+                all_texts.append(chunk["text_preview"])
+                text_map.append((fi, "chunk", ci))
+            if item.get("summary"):
+                all_texts.append(item["summary"])
+                text_map.append((fi, "summary", 0))
+
+        logger.info(
+            "Pipeline phase 2/3: embedding %d texts in batch …", len(all_texts)
+        )
+        all_embeddings = await self.embedding_service.embed_texts(
+            all_texts, batch_size=settings.embedding_batch_size
+        )
+
+        # Distribute embeddings back to their owning file
+        for idx, (fi, kind, si) in enumerate(text_map):
+            if kind == "chunk":
+                prepared[fi]["chunks"][si]["_embedding"] = all_embeddings[idx]
+            else:
+                prepared[fi]["_summary_embedding"] = all_embeddings[idx]
+
+        # ── Phase 3: batch store in DB + ChromaDB ──────────────────────
+        logger.info("Pipeline phase 3/3: storing %d files …", len(prepared))
+
+        all_chroma_ids: List[str] = []
+        all_chroma_embs: List[List[float]] = []
+        all_chroma_metas: List[Dict[str, Any]] = []
+        summary_items: List[Dict[str, Any]] = []
+
+        for item in prepared:
+            try:
+                fdata = item["file_data"]
+                fpath_str = fdata["path"]
+                ftag = item["folder_tag"]
+
+                # If file already exists, remove its old chunks
+                existing = await self.db.get_file_by_path(fpath_str)
+                if existing:
+                    fid_old = existing["id"]
+                    old_chunks = await self.db.get_file_chunks(fid_old)
+                    old_ids = [str(c["id"]) for c in old_chunks]
+                    if old_ids:
+                        await self.chroma_client.delete_documents(old_ids)
+                    await self.db.delete_file_chunks(fid_old)
+
+                file_id = await self.db.insert_file(fdata)
+
+                # Prepare chunk rows (strip the transient _embedding key)
+                chunk_rows = [
+                    {k: v for k, v in c.items() if k != "_embedding"}
+                    for c in item["chunks"]
+                ]
+                for cr in chunk_rows:
+                    cr["file_id"] = file_id
+
+                chunk_ids_int = await self.db.insert_chunks_bulk(chunk_rows)
+
+                for cid_int, chunk in zip(chunk_ids_int, item["chunks"]):
+                    all_chroma_ids.append(str(cid_int))
+                    all_chroma_embs.append(chunk["_embedding"])
+                    all_chroma_metas.append({
+                        "chunk_id": str(cid_int),
+                        "file_path": fpath_str,
+                        "folder_tag": ftag,
+                    })
+
+                if item.get("_summary_embedding"):
+                    summary_items.append({
+                        "doc_id": f"file_{file_id}",
+                        "embedding": item["_summary_embedding"],
+                        "metadata": {
+                            "file_id": file_id,
+                            "file_path": fpath_str,
+                            "folder_tag": ftag,
+                        },
+                    })
+
+                progress.update(len(item["chunks"]), item["path"].name)
+
+            except Exception as e:
+                logger.error("Error storing file %s: %s", item["path"], e)
+                progress.update(0, item["path"].name)
+
+        await self.db.commit()
+
+        # Batch upsert into ChromaDB (ChromaDB caps at ~5 461 per call)
+        CHROMA_BATCH = 5000
+        for i in range(0, len(all_chroma_ids), CHROMA_BATCH):
+            end = min(i + CHROMA_BATCH, len(all_chroma_ids))
+            await self.chroma_client.add_documents(
+                all_chroma_ids[i:end],
+                all_chroma_embs[i:end],
+                all_chroma_metas[i:end],
+            )
+
+        # Batch summary upserts
+        if summary_items:
+            await self.chroma_client.add_summaries_batch(summary_items)
+
+    def _extract_and_prepare(
+        self, path: Path, folder_tag: str
+    ) -> Optional[Dict[str, Any]]:
+        """Synchronous helper: extract text → chunk → build metadata.
+
+        Designed to run inside a ThreadPoolExecutor.
+        """
+        try:
+            stat = path.stat()
+            if stat.st_size > self.max_file_size:
+                logger.warning("Skipping oversized file (%d MB): %s",
+                               stat.st_size // (1024 * 1024), path)
+                return None
+
+            text = self._extract_text(path)
+            if not text:
+                return None
+
+            summary = self._generate_summary(text, path)
+            chunks = self._create_chunks(text, file_path=str(path))
+            if not chunks:
+                return None
+
+            file_data = {
+                "path": str(path.absolute()),
+                "size": stat.st_size,
+                "modified_at": datetime.fromtimestamp(stat.st_mtime).isoformat(),
+                "type": path.suffix.lower(),
+                "folder_tag": folder_tag,
+                "summary": summary,
+            }
+
+            return {
+                "path": path,
+                "folder_tag": folder_tag,
+                "file_data": file_data,
+                "chunks": chunks,
+                "summary": summary,
+            }
+        except Exception as e:
+            logger.error("Error preparing %s: %s", path, e)
+            return None
+
+    def _scan_all_folders(
+        self, unique_folders: List[Path]
+    ) -> Tuple[List[Tuple[Path, str]], str, float]:
+        """Scan all folders and return deduplicated files with scan metadata."""
+        all_files: List[Tuple[Path, str]] = []
+        seen_paths: Set[str] = set()
+        scan_method = ""
+        scan_duration = 0.0
+
+        for path in unique_folders:
+            scan_result = fast_scan(path, self.supported_extensions)
+            scan_method = scan_result.method
+            scan_duration += scan_result.duration_ms
+
+            for file_path in scan_result.files:
+                abs_key = str(file_path.resolve())
+                if abs_key not in seen_paths:
+                    seen_paths.add(abs_key)
+                    all_files.append((file_path, path.name))
+
+        return all_files, scan_method, scan_duration
+
+    async def _detect_changes(
+        self, all_files: List[Tuple[Path, str]]
+    ) -> Tuple[List[Tuple[Path, str]], int, int, int]:
+        """Compare scanned files against the DB and classify as new/changed/unchanged.
+
+        Returns (files_to_index, skipped_count, new_count, changed_count).
+        """
+        file_paths_list = [str(fp.absolute()) for fp, _ in all_files]
+        indexed_map = await self.db.get_files_modified_map(file_paths_list)
+
+        files_to_index: List[Tuple[Path, str]] = []
+        skipped = 0
+        new_count = 0
+        changed_count = 0
+
+        for file_path, folder_tag in all_files:
+            abs_path = str(file_path.absolute())
+            try:
+                current_mtime = datetime.fromtimestamp(
+                    file_path.stat().st_mtime
+                ).isoformat()
+            except OSError:
+                skipped += 1
+                continue
+
+            stored_mtime = indexed_map.get(abs_path)
+            if stored_mtime is not None and stored_mtime == current_mtime:
+                skipped += 1
+                continue
+
+            if stored_mtime is None:
+                new_count += 1
+            else:
+                changed_count += 1
+            files_to_index.append((file_path, folder_tag))
+
+        logger.info(
+            "Change detection: %d scanned → %d to index "
+            "(%d new, %d changed, %d unchanged/skipped).",
+            len(all_files),
+            len(files_to_index),
+            new_count,
+            changed_count,
+            skipped,
+        )
+        return files_to_index, skipped, new_count, changed_count
 
     async def index_file(self, path: Path, folder_tag: str):
         """Extracts text, chunks it, generates embeddings, and stores in both DBs."""
@@ -265,7 +465,6 @@ class IndexingService:
                 "folder_tag": folder_tag
             }
 
-            # If file existed before (changed), cleanup old chunks
             existing_file = await self.db.get_file_by_path(file_data["path"])
             if existing_file:
                 file_id = existing_file["id"]
@@ -274,34 +473,27 @@ class IndexingService:
                 await self.chroma_client.delete_documents(old_chunk_ids)
                 await self.db.delete_file_chunks(file_id)
 
-            # Extract text (run in executor to avoid blocking the event loop)
             loop = asyncio.get_running_loop()
             text = await loop.run_in_executor(None, self._extract_text, path)
             if not text:
                 progress.update(0, str(path.name))
                 return
 
-            # Generate extractive summary
             summary = self._generate_summary(text, path)
 
-            # Insert/Update file metadata
             file_data["summary"] = summary
             file_id = await self.db.insert_file(file_data)
 
-            # Create chunks
             chunks_data = self._create_chunks(text, file_path=str(path))
 
-            # Bulk insert chunks
             for chunk in chunks_data:
                 chunk["file_id"] = file_id
             chunk_ids_int = await self.db.insert_chunks_bulk(chunks_data)
             chunk_ids = [str(cid) for cid in chunk_ids_int]
             chunk_texts = [c["text_preview"] for c in chunks_data]
 
-            # Commit all chunk inserts in one batch
             await self.db.commit()
 
-            # Batch add to Chroma
             if chunk_texts:
                 embeddings = await self.embedding_service.embed_texts(chunk_texts)
                 metadatas = [
@@ -313,7 +505,6 @@ class IndexingService:
 
             logger.info("Indexed file: %s (%d chunks)", path, chunks_added)
 
-            # Store document-level summary embedding in the summaries collection
             if summary:
                 try:
                     summary_emb = await self.embedding_service.embed_texts([summary])
@@ -334,89 +525,144 @@ class IndexingService:
         finally:
             progress.update(chunks_added, str(path.name))
 
+    _TEXT_EXTENSIONS = frozenset({
+        ".txt", ".md", ".py", ".js", ".ts", ".java", ".c", ".cpp", ".rs",
+        ".go", ".rb", ".html", ".css", ".xml", ".yaml", ".yml", ".toml",
+        ".ini", ".cfg", ".sh", ".bat",
+    })
+
     def _extract_text(self, path: Path) -> str:
         """Text extraction for multiple file types.
 
-        Supports: .txt, .md, .pdf, .docx, .csv, .json, and source code files
-        (.py, .js, .ts, .java, .c, .cpp, .rs, .go, .rb, .html, .css, .xml,
-        .yaml, .yml, .toml, .ini, .cfg, .sh, .bat).
+        Supports: .txt, .md, .pdf, .docx, .csv, .json, and source code files.
         """
         ext = path.suffix.lower()
+        extractor = {
+            ".pdf": self._extract_pdf,
+            ".docx": self._extract_docx,
+            ".csv": self._extract_csv,
+            ".json": self._extract_json,
+        }.get(ext)
 
-        # Plain text / Markdown / source code
-        text_extensions = {
-            ".txt", ".md", ".py", ".js", ".ts", ".java", ".c", ".cpp", ".rs",
-            ".go", ".rb", ".html", ".css", ".xml", ".yaml", ".yml", ".toml",
-            ".ini", ".cfg", ".sh", ".bat",
-        }
-        if ext in text_extensions:
-            try:
-                return path.read_text(encoding="utf-8", errors="replace")
-            except Exception as e:
-                logger.error("Error reading text file %s: %s", path, e)
-                return ""
+        if extractor:
+            return extractor(path)
 
-        # PDF
-        if ext == ".pdf":
-            try:
-                import pdfplumber
-                text_content: list[str] = []
-                with pdfplumber.open(path) as pdf:
-                    for page in pdf.pages:
-                        page_text = page.extract_text()
-                        if page_text:
-                            text_content.append(page_text)
-                return "\n".join(text_content)
-            except ImportError:
-                logger.error("pdfplumber not installed. Cannot index PDF files.")
-                return ""
-            except Exception as e:
-                logger.error("Error reading PDF file %s: %s", path, e)
-                return ""
-
-        # DOCX
-        if ext == ".docx":
-            try:
-                from docx import Document
-                doc = Document(str(path))
-                paragraphs = [p.text for p in doc.paragraphs if p.text.strip()]
-                return "\n".join(paragraphs)
-            except ImportError:
-                logger.error("python-docx not installed. Cannot index DOCX files.")
-                return ""
-            except Exception as e:
-                logger.error("Error reading DOCX file %s: %s", path, e)
-                return ""
-
-        # CSV
-        if ext == ".csv":
-            try:
-                import csv
-                rows: list[str] = []
-                with open(path, encoding="utf-8", errors="replace", newline="") as f:
-                    reader = csv.reader(f)
-                    for i, row in enumerate(reader):
-                        if i > 5000:
-                            break  # limit rows to avoid OOM
-                        rows.append(", ".join(row))
-                return "\n".join(rows)
-            except Exception as e:
-                logger.error("Error reading CSV file %s: %s", path, e)
-                return ""
-
-        # JSON
-        if ext == ".json":
-            try:
-                import json
-                text = path.read_text(encoding="utf-8", errors="replace")
-                # Pretty-print for better chunking
-                data = json.loads(text)
-                return json.dumps(data, indent=2, ensure_ascii=False)[:200_000]
-            except Exception as e:
-                logger.error("Error reading JSON file %s: %s", path, e)
-                return ""
+        if ext in self._TEXT_EXTENSIONS:
+            return self._extract_plain_text(path)
 
         return ""
+
+    @staticmethod
+    def _extract_plain_text(path: Path) -> str:
+        """Read a plain-text or source-code file."""
+        try:
+            return path.read_text(encoding="utf-8", errors="replace")
+        except Exception as e:
+            logger.error("Error reading text file %s: %s", path, e)
+            return ""
+
+    @staticmethod
+    def _extract_pdf(path: Path) -> str:
+        """Extract text from a PDF file."""
+        try:
+            import pdfplumber
+            text_content: list[str] = []
+            with pdfplumber.open(path) as pdf:
+                for page in pdf.pages:
+                    page_text = page.extract_text()
+                    if page_text:
+                        text_content.append(page_text)
+            return "\n".join(text_content)
+        except ImportError:
+            logger.error("pdfplumber not installed. Cannot index PDF files.")
+            return ""
+        except Exception as e:
+            logger.error("Error reading PDF file %s: %s", path, e)
+            return ""
+
+    @staticmethod
+    def _extract_docx(path: Path) -> str:
+        """Extract text from a DOCX file."""
+        try:
+            from docx import Document
+            doc = Document(str(path))
+            paragraphs = [p.text for p in doc.paragraphs if p.text.strip()]
+            return "\n".join(paragraphs)
+        except ImportError:
+            logger.error("python-docx not installed. Cannot index DOCX files.")
+            return ""
+        except Exception as e:
+            logger.error("Error reading DOCX file %s: %s", path, e)
+            return ""
+
+    @staticmethod
+    def _extract_csv(path: Path) -> str:
+        """Extract text from a CSV file (caps at 5000 rows)."""
+        try:
+            import csv
+            rows: list[str] = []
+            with open(path, encoding="utf-8", errors="replace", newline="") as f:
+                reader = csv.reader(f)
+                for i, row in enumerate(reader):
+                    if i > 5000:
+                        break
+                    rows.append(", ".join(row))
+            return "\n".join(rows)
+        except Exception as e:
+            logger.error("Error reading CSV file %s: %s", path, e)
+            return ""
+
+    @staticmethod
+    def _extract_json(path: Path) -> str:
+        """Extract text from a JSON file.
+
+        Handles common real-world quirks:
+        - UTF-8 BOM (``utf-8-sig``)
+        - Trailing commas, unquoted keys, single-quoted strings (via fallback)
+        - JSONL / multi-object files (``Extra data`` errors)
+        """
+        import json
+        import re
+
+        try:
+            # Try utf-8-sig first to handle BOM transparently
+            text = path.read_text(encoding="utf-8-sig", errors="replace")
+        except Exception as e:
+            logger.error("Error reading JSON file %s: %s", path, e)
+            return ""
+
+        # --- Attempt 1: strict parse --------------------------------
+        try:
+            data = json.loads(text)
+            return json.dumps(data, indent=2, ensure_ascii=False)[:200_000]
+        except json.JSONDecodeError:
+            pass
+
+        # --- Attempt 2: strip trailing commas before } and ] --------
+        try:
+            cleaned = re.sub(r',\s*([}\]])', r'\1', text)
+            data = json.loads(cleaned)
+            return json.dumps(data, indent=2, ensure_ascii=False)[:200_000]
+        except json.JSONDecodeError:
+            pass
+
+        # --- Attempt 3: JSONL (one JSON object per line) ------------
+        try:
+            parts: list[str] = []
+            for line in text.splitlines():
+                line = line.strip()
+                if line:
+                    parts.append(
+                        json.dumps(json.loads(line), indent=2, ensure_ascii=False)
+                    )
+            if parts:
+                return "\n".join(parts)[:200_000]
+        except json.JSONDecodeError:
+            pass
+
+        # --- Fallback: treat as plain text so the file isn't skipped -
+        logger.debug("JSON parse failed for %s — falling back to raw text.", path)
+        return text[:200_000]
 
     def _generate_summary(self, text: str, path: Path, max_chars: int = 300) -> str:
         """Build a short extractive summary for document-level indexing.
@@ -430,9 +676,7 @@ class IndexingService:
         ftype = path.suffix.lstrip(".").upper() or "file"
         prefix = f"[{ftype}: {fname}] "
 
-        # Take the beginning of the document
         raw = text[:max_chars + 80]  # overshoot to allow sentence snap
-        # Snap to sentence end within the max_chars window
         boundary = self._find_sentence_boundary(raw, min(max_chars, len(raw)))
         if boundary <= 0:
             boundary = min(max_chars, len(raw))
@@ -449,7 +693,6 @@ class IndexingService:
         """
         search_start = max(0, pos - window)
         region = text[search_start:pos]
-        # Prefer paragraph break, then sentence-ending punctuation
         for delim in ["\n\n", ". ", "! ", "? ", ".\n", "!\n", "?\n"]:
             idx = region.rfind(delim)
             if idx != -1:
@@ -463,39 +706,51 @@ class IndexingService:
         to character-based chunking.  A file-context prefix is prepended
         to every chunk so the embedding captures document-level context.
         """
-        chunks: List[Dict[str, Any]] = []
         if not text:
-            return chunks
+            return []
 
-        # Build a short context prefix from the file path
-        context_prefix = ""
-        if file_path:
-            fname = Path(file_path).name
-            ftype = Path(file_path).suffix.lstrip(".").upper() or "file"
-            context_prefix = f"[{ftype}: {fname}] "
+        context_prefix = self._build_context_prefix(file_path)
 
-        # Markdown-aware splitting: split on heading boundaries first
         ext = Path(file_path).suffix.lower() if file_path else ""
         if ext == ".md":
-            import re
-            sections = re.split(r'(?=^#{1,3}\s)', text, flags=re.MULTILINE)
-            sections = [s for s in sections if s.strip()]
-            for section in sections:
-                if len(section) <= self.chunk_size:
-                    chunks.append({
-                        "start_offset": text.find(section),
-                        "end_offset": text.find(section) + len(section),
-                        "text_preview": context_prefix + section.strip(),
-                    })
-                else:
-                    # Sub-chunk large sections
-                    sub_chunks = self._split_text(section, context_prefix, text.find(section))
-                    chunks.extend(sub_chunks)
-            if chunks:
-                return chunks
+            md_chunks = self._chunk_markdown(text, context_prefix)
+            if md_chunks:
+                return md_chunks
 
-        # Default: character-based chunking with sentence snapping
-        chunks = self._split_text(text, context_prefix, 0)
+        return self._split_text(text, context_prefix, 0)
+
+    @staticmethod
+    def _build_context_prefix(file_path: str) -> str:
+        """Build a ``[TYPE: filename]`` prefix for chunk embeddings."""
+        if not file_path:
+            return ""
+        fname = Path(file_path).name
+        ftype = Path(file_path).suffix.lstrip(".").upper() or "file"
+        return f"[{ftype}: {fname}] "
+
+    def _chunk_markdown(
+        self, text: str, context_prefix: str
+    ) -> List[Dict[str, Any]]:
+        """Split Markdown text by headings into section-aware chunks."""
+        import re
+        sections = re.split(r'(?=^#{1,3}\s)', text, flags=re.MULTILINE)
+        sections = [s for s in sections if s.strip()]
+
+        chunks: List[Dict[str, Any]] = []
+        offset = 0
+        for section in sections:
+            section_start = text.find(section, offset)
+            if section_start == -1:
+                section_start = offset
+            if len(section) <= self.chunk_size:
+                chunks.append({
+                    "start_offset": section_start,
+                    "end_offset": section_start + len(section),
+                    "text_preview": context_prefix + section.strip(),
+                })
+            else:
+                chunks.extend(self._split_text(section, context_prefix, section_start))
+            offset = section_start + len(section)
         return chunks
 
     def _split_text(

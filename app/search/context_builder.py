@@ -1,7 +1,6 @@
 from typing import List, Dict, Any
 from app.config import settings
 
-
 def build_context(retrieved_results: List[Dict[str, Any]], max_tokens: int = 0) -> str:
     """Formats retrieved snippets into a single context string for the LLM."""
     if not retrieved_results:
@@ -19,7 +18,6 @@ def build_context(retrieved_results: List[Dict[str, Any]], max_tokens: int = 0) 
         path = res.get("file_path", "Unknown File")
         text = res.get("text", "")
         
-        # Format the snippet with its source
         part = f"""Snippet {snippet_id} [{path}]:
 {text}
 ---

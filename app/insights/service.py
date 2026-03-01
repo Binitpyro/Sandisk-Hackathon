@@ -20,25 +20,21 @@ class InsightsService:
         }
 
         try:
-            # 1. Basic Stats
             rows = await self.db.execute_query("SELECT SUM(size), COUNT(*) FROM files")
             if rows:
                 stats["total_size_bytes"] = rows[0][0] or 0
                 stats["file_count"] = rows[0][1] or 0
 
-            # 2. Top N Largest Files
             rows = await self.db.execute_query(
                 "SELECT path, size FROM files ORDER BY size DESC LIMIT 10"
             )
             stats["top_files"] = [{"path": r[0], "size": r[1]} for r in rows]
 
-            # 3. Cold Files (Usage Count = 0, ordered by size)
             rows = await self.db.execute_query(
                 "SELECT path, size FROM files WHERE usage_count = 0 ORDER BY size DESC LIMIT 10"
             )
             stats["cold_files"] = [{"path": r[0], "size": r[1]} for r in rows]
 
-            # 4. Type Breakdown
             rows = await self.db.execute_query(
                 "SELECT type, COUNT(*), SUM(size) FROM files GROUP BY type"
             )

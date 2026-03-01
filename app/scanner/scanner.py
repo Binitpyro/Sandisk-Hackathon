@@ -1,27 +1,17 @@
 """
-Unified file scanner with automatic strategy selection.
-
-Strategies (tried in order):
-
-1. **NTFS MFT** – reads the Master File Table directly via Windows API.
-   Requires admin privileges on an NTFS volume.  Can enumerate millions
-   of files in 2-5 seconds (same approach as TreeSize / Everything).
-
-2. **os.scandir walk** – cross-platform fallback that is still faster
-   than ``Path.rglob`` because ``DirEntry`` objects cache ``stat()``
-   results and we avoid repeated system calls.
+Cross-platform file scanner module.
+Provides file scanning using different methods based on the platform.
 """
 
-import os
 import logging
-import time
+import os
 import platform
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List, Set
 
 logger = logging.getLogger(__name__)
-
 
 @dataclass
 class ScanResult:
@@ -32,7 +22,6 @@ class ScanResult:
     duration_ms: float = 0.0
     total_mft_entries: int = 0       # only set for MFT scans
 
-
 def scan_folder(folder: Path, extensions: Set[str]) -> ScanResult:
     """
     Scan *folder* for files matching *extensions*.
@@ -41,9 +30,9 @@ def scan_folder(folder: Path, extensions: Set[str]) -> ScanResult:
     """
     t0 = time.perf_counter()
 
-    # ── Strategy 1: NTFS MFT (Windows + admin) ──────────────────────────
     if platform.system() == "Windows":
         try:
+            # pylint: disable=import-outside-toplevel
             from app.scanner.ntfs_mft import NTFSScanner
 
             scanner = NTFSScanner()
@@ -63,17 +52,13 @@ def scan_folder(folder: Path, extensions: Set[str]) -> ScanResult:
                     duration_ms=elapsed_ms,
                     total_mft_entries=scanner.entry_count,
                 )
-        except (ImportError, OSError, PermissionError) as e:
+        except (ImportError, OSError) as e:
             logger.debug("NTFS MFT scan unavailable: %s", e)
 
-    # ── Strategy 2: os.scandir recursive walk ────────────────────────────
     files = _scandir_walk(folder, extensions)
     elapsed_ms = (time.perf_counter() - t0) * 1000
     logger.info("scandir walk: %d files in %.0f ms", len(files), elapsed_ms)
     return ScanResult(files=files, method="scandir", duration_ms=elapsed_ms)
-
-
-# ── scandir helpers ──────────────────────────────────────────────────────────
 
 def _scandir_walk(folder: Path, extensions: Set[str]) -> List[Path]:
     """Recursive file enumeration using ``os.scandir`` (faster than rglob).
@@ -86,19 +71,35 @@ def _scandir_walk(folder: Path, extensions: Set[str]) -> List[Path]:
     while stack:
         current = stack.pop()
         try:
-            with os.scandir(current) as it:
-                for entry in it:
-                    try:
-                        if entry.is_dir(follow_symlinks=False):
-                            stack.append(entry.path)
-                        elif entry.is_file(follow_symlinks=False):
-                            ext = os.path.splitext(entry.name)[1].lower()
-                            if not extensions or ext in extensions:
-                                results.append(Path(entry.path))
-                    except OSError:
-                        continue
-        except PermissionError:
-            logger.debug("Permission denied: %s", current)
+            entries = _list_dir_entries(current, extensions)
+            for is_file, path_str in entries:
+                if is_file:
+                    results.append(Path(path_str))
+                else:
+                    stack.append(path_str)
         except OSError as e:
             logger.debug("Skipping %s: %s", current, e)
     return results
+
+
+def _list_dir_entries(
+    directory: str, extensions: Set[str]
+) -> List[tuple]:
+    """List directory entries as (is_file, path) tuples.
+
+    Returns files matching *extensions* and sub-directories for further
+    traversal.  Each entry that raises ``OSError`` is silently skipped.
+    """
+    entries: List[tuple] = []
+    with os.scandir(directory) as it:
+        for entry in it:
+            try:
+                if entry.is_dir(follow_symlinks=False):
+                    entries.append((False, entry.path))
+                elif entry.is_file(follow_symlinks=False):
+                    ext = os.path.splitext(entry.name)[1].lower()
+                    if not extensions or ext in extensions:
+                        entries.append((True, entry.path))
+            except OSError:
+                continue
+    return entries

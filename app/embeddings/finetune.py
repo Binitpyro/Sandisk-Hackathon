@@ -1,27 +1,9 @@
-"""
-Embedding model fine-tuning utility for domain-specific corpora.
-
-Generates (anchor, positive) training pairs from the indexed chunk data
-and fine-tunes the bi-encoder embedding model using contrastive learning.
-This improves retrieval accuracy on your specific document collection by
-teaching the model which chunks are semantically related.
-
-Usage (CLI)::
-
-    python -m app.embeddings.finetune            # uses defaults
-    python -m app.embeddings.finetune --epochs 3 --output models/finetuned
-
-The script is designed to be run *offline* after a corpus has been indexed.
-The fine-tuned model can then replace the default model by setting the
-``EMBEDDING_MODEL`` environment variable or passing the path to
-``EmbeddingService``.
-"""
-
 import argparse
 import asyncio
 import logging
 import os
 import random
+import secrets
 from pathlib import Path
 from typing import List, Tuple
 
@@ -30,8 +12,9 @@ from torch.utils.data import DataLoader
 
 logger = logging.getLogger(__name__)
 
+_DEFAULT_DB_PATH = "pma_metadata.db"
 
-async def _load_training_pairs(db_path: str = "pma_metadata.db") -> List[Tuple[str, str]]:
+async def _load_training_pairs(db_path: str = _DEFAULT_DB_PATH) -> List[Tuple[str, str]]:
     """Build (anchor, positive) pairs from co-located chunks.
 
     Strategy: for every file with ≥ 2 chunks, pair each chunk with the
@@ -55,18 +38,17 @@ async def _load_training_pairs(db_path: str = "pma_metadata.db") -> List[Tuple[s
             ) as cursor:
                 texts = [row[0] for row in await cursor.fetchall()]
 
-            # Create adjacent-chunk pairs
             for i in range(len(texts) - 1):
                 pairs.append((texts[i], texts[i + 1]))
 
-    random.shuffle(pairs)
+    secure_rng = random.SystemRandom()
+    secure_rng.shuffle(pairs)
     return pairs
-
 
 def finetune(
     base_model: str = "all-MiniLM-L6-v2",
     output_dir: str = "models/finetuned-embedding",
-    db_path: str = "pma_metadata.db",
+    db_path: str = _DEFAULT_DB_PATH,
     epochs: int = 2,
     batch_size: int = 16,
     warmup_fraction: float = 0.1,
@@ -106,14 +88,11 @@ def finetune(
 
     logger.info("Loaded %d training pairs.", len(pairs))
 
-    # Convert to InputExample objects
     examples = [InputExample(texts=[a, b]) for a, b in pairs]
-    loader = DataLoader(examples, shuffle=True, batch_size=batch_size)  # type: ignore[arg-type]
+    loader = DataLoader(examples, shuffle=True, batch_size=batch_size, num_workers=0)  # type: ignore[arg-type]
 
-    # Load the base model
     model = SentenceTransformer(base_model)
 
-    # Use Multiple Negatives Ranking Loss (contrastive, no negatives needed)
     train_loss = losses.MultipleNegativesRankingLoss(model)
 
     warmup_steps = int(len(loader) * epochs * warmup_fraction)
@@ -137,9 +116,6 @@ def finetune(
     logger.info("Fine-tuned model saved to: %s", output_dir)
     return output_dir
 
-
-# ── CLI entry-point ──────────────────────────────────────────────────────────
-
 def main() -> None:
     logging.basicConfig(level=logging.INFO)
 
@@ -157,7 +133,7 @@ def main() -> None:
         help="Output directory for fine-tuned model",
     )
     parser.add_argument(
-        "--db", default="pma_metadata.db", help="Path to metadata database"
+        "--db", default=_DEFAULT_DB_PATH, help="Path to metadata database"
     )
     parser.add_argument(
         "--epochs", type=int, default=2, help="Training epochs"
@@ -182,7 +158,6 @@ def main() -> None:
         )
     else:
         print("\nFine-tuning skipped — not enough training data.")
-
 
 if __name__ == "__main__":
     main()

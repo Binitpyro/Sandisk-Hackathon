@@ -1,25 +1,32 @@
-import aiosqlite
+"""
+Database manager module for Personal Memory Assistant.
+Handles interactions with SQLite using aiosqlite for metadata storage.
+"""
+
 import logging
-from typing import Dict, List, Optional, Any, Tuple
 from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple
+
+import aiosqlite
 
 logger = logging.getLogger(__name__)
 
-
 class DatabaseManager:
+    """Manages the SQLite database connection and operations."""
+
     def __init__(self, db_path: str = "pma_metadata.db"):
+        """Initializes the DatabaseManager."""
         self.db_path = db_path
         self.conn: Optional[aiosqlite.Connection] = None
 
     async def connect(self) -> None:
+        """Establish connection to the SQLite database."""
         if not self.conn:
             self.conn = await aiosqlite.connect(self.db_path)
             self.conn.row_factory = aiosqlite.Row
-            # WAL mode gives much better read concurrency while indexing
             await self.conn.execute("PRAGMA journal_mode = WAL;")
             await self.conn.execute("PRAGMA foreign_keys = ON;")
             await self.conn.execute("PRAGMA synchronous = NORMAL;")
-            # Avoid "database is locked" when reads overlap writes
             await self.conn.execute("PRAGMA busy_timeout = 5000;")
 
     def _get_conn(self) -> aiosqlite.Connection:
@@ -29,11 +36,13 @@ class DatabaseManager:
         return self.conn
 
     async def close(self):
+        """Close the active database connection if open."""
         if self.conn:
             await self.conn.close()
             self.conn = None
 
     async def init_db(self, schema_path: str = "app/storage/schema.sql") -> None:
+        """Initialize the database with the schema."""
         await self.connect()
         conn = self._get_conn()
         try:
@@ -44,15 +53,16 @@ class DatabaseManager:
         except Exception as e:
             logger.error("Error initializing database: %s", e)
             raise
-        # Run lightweight migrations for columns added after initial release
         await self._migrate(conn)
 
     async def _migrate(self, conn: "aiosqlite.Connection") -> None:
         """Apply safe, idempotent schema migrations."""
         migrations = [
             ("summary", "ALTER TABLE files ADD COLUMN summary TEXT DEFAULT ''"),
-            ("files_created_at", "ALTER TABLE files ADD COLUMN created_at TEXT NOT NULL DEFAULT ''"),
-            ("chunks_created_at", "ALTER TABLE chunks ADD COLUMN created_at TEXT NOT NULL DEFAULT ''"),
+            ("files_created_at",
+             "ALTER TABLE files ADD COLUMN created_at TEXT NOT NULL DEFAULT ''"),
+            ("chunks_created_at",
+             "ALTER TABLE chunks ADD COLUMN created_at TEXT NOT NULL DEFAULT ''"),
         ]
         for col_name, ddl in migrations:
             try:
@@ -61,7 +71,7 @@ class DatabaseManager:
                 logger.info("Migration applied: added column '%s'.", col_name)
             except Exception as exc:
                 if "duplicate column" in str(exc).lower():
-                    pass
+                    logger.debug("Column '%s' already exists — skipping.", col_name)
                 else:
                     logger.error("Migration failed for column '%s': %s", col_name, exc)
                     raise
@@ -106,7 +116,7 @@ class DatabaseManager:
 
     async def insert_chunks_bulk(self, chunks: List[Dict[str, Any]]) -> List[int]:
         """Insert multiple chunks in a single transaction using executemany.
-        
+
         Returns a list of inserted chunk IDs.
         """
         if not chunks:
@@ -212,8 +222,6 @@ class DatabaseManager:
         async with conn.execute(sql, params) as cursor:
             return list(await cursor.fetchall())
 
-    # ── Query history ────────────────────────────────────────────────────
-
     async def save_query(
         self, question: str, answer: str, source_count: int, latency_ms: float
     ) -> int:
@@ -249,11 +257,9 @@ class DatabaseManager:
                 for r in rows
             ]
 
-    # ── Cleanup / Data management ────────────────────────────────────────
-
     async def cleanup_stale_files(self) -> List[str]:
         """Remove index entries for files that no longer exist on disk.
-        
+
         Returns list of paths that were cleaned up.
         """
         import os
@@ -274,12 +280,11 @@ class DatabaseManager:
 
     async def clear_all(self) -> Dict[str, int]:
         """Delete ALL indexed data: files, chunks, FTS, and query history.
-        
+
         Returns counts of removed files and chunks.
         """
         conn = self._get_conn()
 
-        # Gather counts first, closing cursors immediately
         cur = await conn.execute("SELECT COUNT(*) FROM files")
         row = await cur.fetchone()
         files_count = row[0] if row else 0
@@ -290,10 +295,6 @@ class DatabaseManager:
         chunks_count = row[0] if row else 0
         await cur.close()
 
-        # Nuclear clear: drop FTS table + triggers, delete data, recreate.
-        # This avoids every possible issue with FTS5 external-content tables
-        # (bare DELETE is unsupported, trigger-fired deletes can conflict,
-        # 'rebuild' can fail on empty content table, etc.).
         await conn.executescript("""
             -- Remove triggers so chunk deletes don't touch FTS
             DROP TRIGGER IF EXISTS chunks_ai;
@@ -348,6 +349,15 @@ class DatabaseManager:
         sql = f"SELECT path, size, type, folder_tag, usage_count FROM files{where} ORDER BY path"
         async with conn.execute(sql, params) as cursor:
             return list(await cursor.fetchall())
+
+    async def delete_files_by_folder_prefix(self, folder: str) -> None:
+        """Delete all files (and cascading chunks) whose path starts with *folder*."""
+        conn = self._get_conn()
+        await conn.execute(
+            "DELETE FROM files WHERE path LIKE ? || '%'",
+            (folder,),
+        )
+        await conn.commit()
 
     async def is_healthy(self) -> bool:
         """Quick DB health check – runs a trivial query."""

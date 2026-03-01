@@ -70,6 +70,17 @@ testpaths = ["tests"]
 python_files = "test_*.py"
 python_functions = "test_*"
 
+[tool.coverage.run]
+source = ["app"]
+omit = ["tests/*", "*/__pycache__/*"]
+
+[tool.coverage.report]
+show_missing = true
+fail_under = 0
+
+[tool.coverage.xml]
+output = "coverage.xml"
+
 [tool.mypy]
 python_version = "3.11"
 warn_return_any = true

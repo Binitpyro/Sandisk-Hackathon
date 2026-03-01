@@ -6,7 +6,6 @@ from app.config import settings
 
 logger = logging.getLogger(__name__)
 
-
 class LLMClient:
     def __init__(self):
         self.api_key = settings.gemini_api_key
@@ -68,25 +67,20 @@ Answer:
             }]
         }
         
+        client = self._get_gemini_client()
+        response = await client.post(url, json=payload, headers=headers)
+        if response.status_code != 200:
+            logger.error("Gemini API error (%d): <redacted>", response.status_code)
+            return f"Gemini API returned error {response.status_code}. Please check your API key or connection."
+        
+        data = response.json()
         try:
-            client = self._get_gemini_client()
-            response = await client.post(url, json=payload, headers=headers)
-            if response.status_code != 200:
-                logger.error("Gemini API error (%d): <redacted>", response.status_code)
-                return f"Gemini API returned error {response.status_code}. Please check your API key or connection."
-            
-            data = response.json()
-            # Extract text from Gemini response structure
-            try:
-                if 'candidates' in data and data['candidates']:
-                    return data['candidates'][0]['content']['parts'][0]['text']
-            except (KeyError, IndexError, TypeError):
-                pass
-            logger.error("Unexpected Gemini response structure (keys: %s)", list(data.keys()))
-            return "Error parsing Gemini response."
-        except httpx.HTTPError as e:
-            logger.error("Gemini API call failed: %s", e)
-            return "Error calling Gemini API. Please check your network connection."
+            if 'candidates' in data and data['candidates']:
+                return data['candidates'][0]['content']['parts'][0]['text']
+        except (KeyError, IndexError, TypeError):
+            pass
+        logger.error("Unexpected Gemini response structure (keys: %s)", list(data.keys()))
+        return "Error parsing Gemini response."
 
     async def _call_ollama(self, prompt: str) -> str:
         """Fallback to local Ollama instance."""

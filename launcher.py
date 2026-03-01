@@ -66,9 +66,10 @@ def find_python() -> str:
 
 
 def is_admin() -> bool:
+    """Check whether the current process has administrator privileges."""
     try:
-        return ctypes.windll.kernel32.GetModuleHandleW("ntdll.dll") and ctypes.windll.shell32.IsUserAnAdmin()
-    except Exception:
+        return bool(ctypes.windll.shell32.IsUserAnAdmin())
+    except (AttributeError, OSError):
         return False
 
 

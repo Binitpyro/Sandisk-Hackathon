@@ -13,9 +13,7 @@ from app.config import settings
 
 logger = logging.getLogger(__name__)
 
-# Characters that act as FTS5 operators and must be stripped from user input
 _FTS5_OPERATOR_RE = re.compile(r'["*^]|\bAND\b|\bOR\b|\bNOT\b|\bNEAR\b', re.IGNORECASE)
-
 
 def _sanitize_fts_query(query: str) -> str:
     """Sanitize user input for safe use in FTS5 MATCH.
@@ -29,7 +27,6 @@ def _sanitize_fts_query(query: str) -> str:
         return '"' + query.replace('"', '') + '"'
     return ' '.join(f'"{t}"' for t in tokens)
 
-
 async def _fts_search(db: DatabaseManager, query: str, k: int) -> List[Dict[str, Any]]:
     """Run FTS5 keyword search."""
     try:
@@ -40,7 +37,6 @@ async def _fts_search(db: DatabaseManager, query: str, k: int) -> List[Dict[str,
     except Exception as e:
         logger.warning("FTS5 Search failed (non-fatal, falling back to semantic only): %s", e)
         return []
-
 
 async def _semantic_search_with_emb(
     chroma_client: ChromaClient,
@@ -59,7 +55,6 @@ async def _semantic_search_with_emb(
                 "score": dists[i] if i < len(dists) else 0.0,
             })
     return results
-
 
 def _compute_rrf_scores(
     fts_results: List[Dict[str, Any]],
@@ -80,7 +75,6 @@ def _compute_rrf_scores(
         chunk_id = res["id"]
         scores[chunk_id] = scores.get(chunk_id, 0.0) + sem_w * (1.0 / (k_rrf + rank + 1))
     return sorted(scores.items(), key=lambda x: x[1], reverse=True)[:k]
-
 
 async def _summary_search_with_emb(
     chroma_client: ChromaClient,
@@ -105,7 +99,6 @@ async def _summary_search_with_emb(
         logger.debug("Summary search unavailable (non-fatal): %s", e)
         return set()
 
-
 async def hybrid_retrieve(
     query: str, 
     db: DatabaseManager, 
@@ -116,20 +109,16 @@ async def hybrid_retrieve(
     """Combines FTS5 keyword + Chroma semantic + document-summary search using RRF,
     then reranks the candidates with a cross-encoder for maximum precision."""
 
-    # ── Compute query embedding once, reuse for semantic + summary ────────
     query_emb = await embedding_service.embed_query(query)
 
-    # ── Run FTS5, Semantic, and Summary searches in parallel ─────────────
     fts_results, semantic_results, relevant_doc_paths = await asyncio.gather(
         _fts_search(db, query, k),
         _semantic_search_with_emb(chroma_client, query_emb, k),
         _summary_search_with_emb(chroma_client, query_emb, k),
     )
 
-    # ── Reciprocal Rank Fusion (RRF) with summary boost ──────────────────
     sorted_ids = _compute_rrf_scores(fts_results, semantic_results, k * 2)
 
-    # ── Fetch full metadata from DB (batched) ────────────────────────────
     if not sorted_ids:
         return []
 
@@ -146,14 +135,12 @@ async def hybrid_retrieve(
     for row in rows:
         row_map[row[0]] = row
 
-    # Preserve RRF ranking order and apply summary boost
     results = []
     for cid in chunk_ids_ordered:
         row = row_map.get(cid)
         if row:
             file_path = row[2]
             rrf_score = score_map[cid] * settings.rrf_score_scale
-            # Boost chunks from documents that the summary search deemed relevant
             if file_path in relevant_doc_paths:
                 rrf_score *= settings.summary_boost_factor
             results.append({
@@ -164,7 +151,6 @@ async def hybrid_retrieve(
                 "score": round(rrf_score, 4),
             })
 
-    # ── Rerank with cross-encoder ────────────────────────────────────────
     if results:
         results = await rerank(query, results, top_k=k, text_key="text")
 
@@ -187,7 +173,6 @@ async def full_rag(
     """
     t_start = time.perf_counter()
     
-    # Step 1: Hybrid Retrieval
     retrieved = await hybrid_retrieve(
         query=query,
         db=db,
@@ -197,7 +182,6 @@ async def full_rag(
     )
     t_retrieval = time.perf_counter()
     
-    # Apply optional post-retrieval filters
     if file_type or folder_tag:
         filtered = []
         for r in retrieved:
@@ -218,11 +202,9 @@ async def full_rag(
             "latency_ms": round((time.perf_counter() - t_start) * 1000, 1),
         }
         
-    # Step 2: Build Context
     context = build_context(retrieved)
     t_context = time.perf_counter()
     
-    # Step 3: LLM Generation
     answer = await llm_client.generate_answer(query, context)
     t_llm = time.perf_counter()
     
@@ -235,7 +217,6 @@ async def full_rag(
         total_ms,
     )
     
-    # Step 4: Parse answer and return
     return {
         "answer": answer,
         "sources": retrieved,

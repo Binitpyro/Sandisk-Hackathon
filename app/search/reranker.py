@@ -1,17 +1,3 @@
-"""
-Cross-encoder reranker for post-retrieval relevance scoring.
-
-Uses a lightweight CrossEncoder model from ``sentence-transformers`` to
-re-score (query, chunk_text) pairs.  Because a cross-encoder attends over
-the *concatenation* of query and document it captures fine-grained
-relevance that bi-encoder similarity misses — Anthropic's experiments
-show a 67 % retrieval-failure reduction when contextual retrieval is
-combined with reranking.
-
-The model is loaded lazily on first use and cached for the process
-lifetime so startup is not affected when reranking isn't needed.
-"""
-
 import asyncio
 import logging
 import threading
@@ -21,11 +7,9 @@ from sentence_transformers import CrossEncoder  # ships with sentence-transforme
 
 logger = logging.getLogger(__name__)
 
-# ── Module-level singleton with thread-safe initialisation ────────────────
 _reranker: Optional[CrossEncoder] = None
 _reranker_lock = threading.Lock()
 _MODEL_NAME = "cross-encoder/ms-marco-MiniLM-L-6-v2"
-
 
 def _get_model() -> CrossEncoder:
     """Lazily load the cross-encoder (≈ 80 MB, ~120 ms on CPU). Thread-safe."""
@@ -37,7 +21,6 @@ def _get_model() -> CrossEncoder:
                 _reranker = CrossEncoder(_MODEL_NAME, max_length=512)
                 logger.info("Reranker model loaded.")
     return _reranker
-
 
 async def rerank(
     query: str,
@@ -69,16 +52,16 @@ async def rerank(
     if not results:
         return results
 
-    model = _get_model()
+    loop = asyncio.get_running_loop()
+    # Load model off the event loop to avoid blocking during first download/load
+    model = await loop.run_in_executor(None, _get_model)
     pairs = [(query, item[text_key]) for item in results]
 
-    loop = asyncio.get_running_loop()
     scores = await loop.run_in_executor(
         None,
         lambda: model.predict(pairs, show_progress_bar=False).tolist(),
     )
 
-    # Attach scores and sort
     for item, score in zip(results, scores):
         item["rerank_score"] = round(float(score), 6)
 
