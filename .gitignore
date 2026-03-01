@@ -192,6 +192,8 @@ venv/
 
 # App Data / Persistence
 pma_metadata.db
+pma_metadata.db-journal
+pma_metadata.db-wal
 chroma_db/
 demo_data/
 .env
@@ -209,3 +211,9 @@ vector_store/chroma_db/
 docs/
 personal help/
 GEMINI.md
+
+# Built executables
+*.exe
+dist/
+build/
+*.spec

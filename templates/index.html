@@ -1,256 +1,1514 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="light">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Personal Memory Assistant</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js" integrity="sha384-UPmMFiKmhOcKMShHy8r0VxDOzfm5oOGqoGe+OJdK6xke+tDJfC7GkDqEWv/VjAg" crossorigin="anonymous"></script>
     <style>
-        :root { --primary: #2563eb; --bg: #f8fafc; --card: #ffffff; --text: #1e293b; --accent: #10b981; }
-        body { font-family: 'Inter', system-ui, sans-serif; background: var(--bg); color: var(--text); margin: 0; padding: 0; display: flex; flex-direction: column; min-height: 100vh; }
-        .container { max-width: 900px; margin: 0 auto; width: 100%; padding: 2rem; box-sizing: border-box; flex-grow: 1; }
-        header { background: var(--card); padding: 1.5rem 0; box-shadow: 0 1px 3px rgba(0,0,0,0.1); text-align: center; }
-        h1 { margin: 0; font-size: 1.5rem; display: flex; align-items: center; justify-content: center; gap: 0.5rem; }
-        
-        .tabs { display: flex; gap: 1rem; border-bottom: 1px solid #e2e8f0; margin-bottom: 2rem; padding: 0 1rem; }
-        .tab { padding: 0.75rem 1.5rem; cursor: pointer; border-bottom: 2px solid transparent; transition: all 0.2s; font-weight: 500; }
-        .tab.active { border-color: var(--primary); color: var(--primary); }
-        .tab:hover { background: #f1f5f9; }
+    /* ══════════════════════════════════════════════════════════
+       DESIGN TOKENS
+       ══════════════════════════════════════════════════════════ */
+    :root {
+        --bg:#f1f5e0; --bg-card:#fafcf2; --bg-sidebar:#f6f8ed; --bg-hover:#e8ecda;
+        --bg-input:#f4f7e8; --bg-accent:#ede8fb;
+        --text:#1a1530; --text-2:#4a4560; --text-3:#959f93;
+        --primary:#3d15cb; --primary-h:#8e48ea; --primary-soft:#ede8fb;
+        --success:#34a853; --success-soft:#e8f5e9;
+        --warn:#e8a317;  --warn-soft:#fef6dd;
+        --danger:#d93025; --danger-soft:#fce8e6;
+        --border:#d4d9c8;
+        --sh:0 1px 3px rgba(61,21,203,.06); --sh-lg:0 4px 16px rgba(61,21,203,.1);
+        --r:10px; --r-sm:6px; --r-lg:14px;
+        --sidebar-w:230px;
+        --periwinkle:#9984d4;
+        --chart-1:#3d15cb; --chart-2:#8e48ea; --chart-3:#9984d4; --chart-4:#959f93;
+        --chart-5:#6b2ff5; --chart-6:#b8a9e3; --chart-7:#706b82; --chart-8:#c7cbc0;
+    }
+    [data-theme="dark"] {
+        --bg:#0e0b1a; --bg-card:#16122a; --bg-sidebar:#110e22; --bg-hover:#1f1a36;
+        --bg-input:#1a1530; --bg-accent:#241b45;
+        --text:#f1f5e0; --text-2:#b8b3cc; --text-3:#706b82;
+        --primary:#8e48ea; --primary-h:#9984d4; --primary-soft:#241b45;
+        --success:#5be080; --success-soft:#0d3320;
+        --warn:#fbbf24;  --warn-soft:#4a3506;
+        --danger:#f87171; --danger-soft:#4a1515;
+        --border:#2a2542;
+        --periwinkle:#9984d4;
+        --sh:0 1px 3px rgba(0,0,0,.35); --sh-lg:0 4px 16px rgba(142,72,234,.15);
+    }
 
-        .tab-content { display: none; background: var(--card); padding: 2rem; border-radius: 12px; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1); border: 1px solid #e2e8f0; }
-        .tab-content.active { display: block; animation: fadeIn 0.3s ease; }
+    /* ══════════════════════════════════════════════════════════
+       BASE
+       ══════════════════════════════════════════════════════════ */
+    *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+    body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-serif;
+         background:var(--bg);color:var(--text);display:flex;height:100vh;overflow:hidden;
+         transition:background .35s ease,color .35s ease;font-size:14px;line-height:1.5}
+    a{text-decoration:none;color:inherit}
+    ::-webkit-scrollbar{width:6px;height:6px}
+    ::-webkit-scrollbar-track{background:transparent}
+    ::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px}
+    ::-webkit-scrollbar-thumb:hover{background:var(--text-3)}
 
-        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+    /* ══════════════════════════════════════════════════════════
+       SIDEBAR
+       ══════════════════════════════════════════════════════════ */
+    .sidebar{width:var(--sidebar-w);min-width:var(--sidebar-w);background:var(--bg-sidebar);
+             border-right:1px solid var(--border);display:flex;flex-direction:column;
+             transition:background .3s;user-select:none;z-index:10}
+    .sidebar-logo{padding:1.25rem 1.25rem .75rem;display:flex;align-items:center;gap:.6rem}
+    .logo-icon{font-size:1.6rem}
+    .logo-text{font-size:1.1rem;font-weight:700;letter-spacing:-.02em}
+    .sidebar-nav{flex:1;padding:.5rem .6rem;display:flex;flex-direction:column;gap:2px}
+    .nav-item{display:flex;align-items:center;gap:.65rem;padding:.6rem .75rem;border-radius:var(--r-sm);
+              cursor:pointer;font-weight:500;font-size:.875rem;color:var(--text-2);
+              transition:all .15s}
+    .nav-item:hover{background:var(--bg-hover);color:var(--text)}
+    .nav-item.active{background:var(--primary-soft);color:var(--primary);font-weight:600;
+                     box-shadow:inset 3px 0 0 var(--primary)}
+    .nav-item svg{width:18px;height:18px;flex-shrink:0;stroke-width:2}
+    .nav-badge{margin-left:auto;font-size:.7rem;background:var(--primary);color:#fff;
+               padding:1px 7px;border-radius:99px;font-weight:600}
+    .sidebar-footer{padding:.75rem 1rem;border-top:1px solid var(--border);
+                    display:flex;align-items:center;justify-content:space-between}
+    .theme-btn{appearance:none;border:none;background:var(--bg-hover);color:var(--text-2);
+               width:36px;height:36px;border-radius:var(--r-sm);cursor:pointer;
+               display:flex;align-items:center;justify-content:center;transition:all .15s}
+    .theme-btn:hover{background:var(--primary-soft);color:var(--primary)}
+    .theme-btn svg{width:18px;height:18px}
+    .sidebar-hint{font-size:.7rem;color:var(--text-3)}
+    .sidebar-kbd{display:inline-flex;align-items:center;gap:2px;font-size:.65rem;
+                 padding:2px 5px;background:var(--bg-hover);border:1px solid var(--border);
+                 border-radius:4px;color:var(--text-3);font-family:inherit}
 
-        .input-group { display: flex; gap: 0.5rem; margin-bottom: 1.5rem; }
-        input, textarea { padding: 0.75rem; border: 1px solid #cbd5e1; border-radius: 8px; font-size: 1rem; width: 100%; box-sizing: border-box; }
-        button { padding: 0.75rem 1.5rem; background: var(--primary); color: white; border: none; border-radius: 8px; cursor: pointer; font-weight: 600; white-space: nowrap; transition: filter 0.2s; }
-        button:hover { filter: brightness(1.1); }
-        button:disabled { opacity: 0.6; cursor: not-allowed; }
-        .btn-secondary { background: #64748b; }
-        
-        .progress-container { background: #e2e8f0; border-radius: 99px; height: 12px; margin: 1rem 0; overflow: hidden; display: none; }
-        .progress-bar { height: 100%; background: var(--accent); width: 0%; transition: width 0.3s; }
-        
-        .answer-box { margin-top: 2rem; padding: 1.5rem; background: #f1f5f9; border-radius: 10px; border-left: 5px solid var(--primary); white-space: pre-wrap; line-height: 1.6; }
-        .sources { margin-top: 1.5rem; }
-        .source-item { padding: 1rem; border: 1px solid #e2e8f0; border-radius: 8px; margin-bottom: 0.75rem; background: #fff; }
-        .source-path { font-weight: bold; color: var(--primary); font-size: 0.9rem; }
-        .source-snippet { font-size: 0.85rem; color: #64748b; margin-top: 0.5rem; }
+    /* ══════════════════════════════════════════════════════════
+       MAIN CONTENT
+       ══════════════════════════════════════════════════════════ */
+    .main{flex:1;overflow-y:auto;display:flex;flex-direction:column}
+    .page{display:none;flex:1;padding:2rem 2.5rem 3rem;max-width:1100px;width:100%;
+          margin:0 auto;animation:fadeUp .25s ease}
+    .page.active{display:block}
+    @keyframes fadeUp{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+    .page-header{margin-bottom:1.75rem}
+    .page-header h1{display:flex;align-items:center;gap:.5rem;margin-bottom:.25rem}
+    .page-header p{color:var(--text-3);font-size:.875rem}
 
-        .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1.5rem; margin-bottom: 2rem; }
-        .stat-card { padding: 1.5rem; background: #f8fafc; border-radius: 10px; border: 1px solid #e2e8f0; text-align: center; }
-        .stat-value { font-size: 2rem; font-weight: bold; color: var(--primary); }
-        .stat-label { font-size: 0.875rem; color: #64748b; margin-top: 0.5rem; }
+    /* ══════════════════════════════════════════════════════════
+       CARDS
+       ══════════════════════════════════════════════════════════ */
+    .card{background:var(--bg-card);border:1px solid var(--border);border-radius:var(--r);
+          padding:1.5rem;box-shadow:var(--sh);transition:box-shadow .25s ease,border-color .25s ease,
+          transform .25s ease}
+    .card:hover{box-shadow:var(--sh-lg);transform:translateY(-1px)}
+    .card+.card{margin-top:1rem}
+    .card-title{font-size:.95rem;font-weight:600;margin-bottom:1rem;display:flex;
+                align-items:center;gap:.5rem}
+    .card-title svg{width:18px;height:18px;color:var(--primary)}
+    .card-muted{color:var(--text-3);font-size:.8rem;margin-top:.5rem}
 
-        table { width: 100%; border-collapse: collapse; margin-top: 1rem; }
-        th, td { text-align: left; padding: 0.75rem; border-bottom: 1px solid #e2e8f0; }
-        th { background: #f8fafc; font-size: 0.875rem; color: #64748b; }
+    /* ══════════════════════════════════════════════════════════
+       STAT CHIPS
+       ══════════════════════════════════════════════════════════ */
+    .stats-row{display:flex;gap:.75rem;flex-wrap:wrap;margin-bottom:1.5rem}
+    .stat-chip{display:flex;align-items:center;gap:.5rem;padding:.65rem 1rem;
+               background:var(--bg-card);border:1px solid var(--border);border-radius:var(--r-sm);
+               min-width:150px;flex:1}
+    .stat-chip .stat-icon{width:36px;height:36px;border-radius:var(--r-sm);display:flex;
+                          align-items:center;justify-content:center;flex-shrink:0}
+    .stat-chip .stat-icon.purple{background:var(--primary-soft);color:var(--primary)}
+    .stat-chip .stat-icon.green{background:var(--success-soft);color:var(--success)}
+    .stat-chip .stat-icon.amber{background:var(--warn-soft);color:var(--warn)}
+    .stat-chip .stat-icon.red{background:var(--danger-soft);color:var(--danger)}
+    .stat-chip .stat-info .stat-val{font-size:1.15rem;font-weight:700;line-height:1.2}
+    .stat-chip .stat-info .stat-label{font-size:.7rem;color:var(--text-3);text-transform:uppercase;
+                                       letter-spacing:.04em;font-weight:500}
+
+    /* ══════════════════════════════════════════════════════════
+       BUTTONS
+       ══════════════════════════════════════════════════════════ */
+    .btn{display:inline-flex;align-items:center;gap:.4rem;padding:.55rem 1.1rem;
+         border-radius:var(--r-sm);font-weight:600;font-size:.8rem;cursor:pointer;
+         border:none;transition:all .15s;font-family:inherit;white-space:nowrap}
+    .btn svg{width:16px;height:16px}
+    .btn-primary{background:var(--primary);color:#fff}
+    .btn-primary:hover{background:var(--primary-h);transform:translateY(-1px)}
+    .btn-secondary{background:var(--bg-hover);color:var(--text-2);border:1px solid var(--border)}
+    .btn-secondary:hover{border-color:var(--primary);color:var(--primary)}
+    .btn-success{background:var(--success);color:#fff}
+    .btn-success:hover{filter:brightness(1.1)}
+    .btn-ghost{background:transparent;color:var(--text-2)}
+    .btn-ghost:hover{background:var(--bg-hover)}
+    .btn-danger{background:var(--danger);color:#fff}
+    .btn-danger:hover{filter:brightness(1.15);transform:translateY(-1px)}
+    .btn:disabled{opacity:.5;cursor:not-allowed;transform:none!important}
+    .btn-icon{padding:.55rem;min-width:unset}
+    .btn-lg{padding:.7rem 1.4rem;font-size:.875rem}
+
+    /* ══════════════════════════════════════════════════════════
+       FORMS
+       ══════════════════════════════════════════════════════════ */
+    .input{padding:.55rem .75rem;border:1px solid var(--border);border-radius:var(--r-sm);
+           font-size:.875rem;font-family:inherit;background:var(--bg-input);color:var(--text);
+           transition:border-color .15s,box-shadow .15s;width:100%;outline:none}
+    .input:focus{border-color:var(--primary);box-shadow:0 0 0 3px rgba(61,21,203,.15)}
+    .input::placeholder{color:var(--text-3)}
+    textarea.input{resize:vertical;min-height:80px}
+    .input-row{display:flex;gap:.5rem;align-items:center}
+
+    /* ══════════════════════════════════════════════════════════
+       DROP ZONE
+       ══════════════════════════════════════════════════════════ */
+    .drop-zone{border:2px dashed var(--border);border-radius:var(--r);padding:2rem;
+               text-align:center;color:var(--text-3);cursor:pointer;transition:all .2s;
+               margin-top:.75rem}
+    .drop-zone:hover,.drop-zone.drag-over{border-color:var(--primary);background:var(--primary-soft);
+                                           color:var(--primary)}
+    .drop-zone svg{width:32px;height:32px;margin:0 auto .5rem;display:block;opacity:.5}
+    .drop-zone p{font-size:.85rem;margin-bottom:.25rem}
+    .drop-zone small{font-size:.75rem;opacity:.7}
+
+    /* ══════════════════════════════════════════════════════════
+       GLOBAL PROGRESS BANNER  (visible on ALL pages)
+       ══════════════════════════════════════════════════════════ */
+    .global-progress{display:none;background:var(--bg-card);border-bottom:1px solid var(--border);
+        padding:.55rem 2rem;flex-shrink:0;cursor:pointer;user-select:none;
+        transition:background .2s}
+    .global-progress:hover{background:var(--bg-hover)}
+    .global-progress.visible{display:flex;align-items:center;gap:1rem;animation:fadeUp .25s ease}
+    .global-progress.gp-done{cursor:default}
+    .gp-track{flex:1;height:6px;background:var(--bg-hover);border-radius:99px;overflow:hidden;
+        min-width:80px;max-width:420px}
+    .gp-fill{height:100%;background:linear-gradient(90deg,var(--primary),var(--primary-h));
+        border-radius:99px;transition:width .35s ease;position:relative}
+    .gp-fill.active::after{content:'';position:absolute;inset:0;
+        background:linear-gradient(90deg,transparent,rgba(255,255,255,.3),transparent);
+        animation:shimmer 1.5s infinite}
+    .gp-text{font-size:.78rem;color:var(--text-2);white-space:nowrap;display:flex;
+        align-items:center;gap:.5rem}
+    .gp-pct{font-weight:700;color:var(--primary);min-width:2.5em;text-align:right}
+    .gp-file{max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+        font-family:monospace;font-size:.72rem;color:var(--text-3)}
+    .gp-stats{font-size:.72rem;color:var(--text-3);display:flex;gap:.65rem}
+    .gp-stats span{display:flex;align-items:center;gap:.2rem}
+    .gp-dot{width:5px;height:5px;border-radius:50%;display:inline-block}
+
+    /* Sidebar indexing badge */
+    .nav-indexing-dot{width:8px;height:8px;border-radius:50%;background:var(--warn);
+        margin-left:auto;animation:pulse-glow 1.5s ease infinite;display:none}
+    .nav-indexing-dot.active{display:inline-block}
+
+    /* ══════════════════════════════════════════════════════════
+       PROGRESS (in-page detail section)
+       ══════════════════════════════════════════════════════════ */
+    .progress-section{margin-top:1rem;display:none}
+    .progress-section.visible{display:block;animation:fadeUp .3s ease}
+    .progress-track{height:8px;background:var(--bg-hover);border-radius:99px;overflow:hidden}
+    .progress-fill{height:100%;background:linear-gradient(90deg,var(--primary),var(--primary-h));
+                   border-radius:99px;transition:width .3s ease;position:relative}
+    .progress-fill.active::after{content:'';position:absolute;inset:0;
+        background:linear-gradient(90deg,transparent,rgba(255,255,255,.3),transparent);
+        animation:shimmer 1.5s infinite}
+    @keyframes shimmer{0%{transform:translateX(-100%)}100%{transform:translateX(100%)}}
+    .progress-info{display:flex;justify-content:space-between;margin-top:.5rem;
+                   font-size:.78rem;color:var(--text-3)}
+    .progress-detail{font-size:.72rem;color:var(--text-3);margin-top:.35rem;
+                     display:flex;justify-content:space-between;align-items:center}
+    .progress-file{max-width:60%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+                   color:var(--text-2);font-family:monospace;font-size:.7rem}
+    .progress-stats{display:flex;gap:1rem;font-size:.72rem;margin-top:.5rem;flex-wrap:wrap}
+    .progress-stats .ps{display:flex;align-items:center;gap:.25rem}
+    .progress-stats .ps-dot{width:6px;height:6px;border-radius:50%;display:inline-block}
+
+    /* ══════════════════════════════════════════════════════════
+       VOLUMES
+       ══════════════════════════════════════════════════════════ */
+    .vol-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:.6rem;
+              margin-top:.75rem}
+    .vol-card{background:var(--bg-input);border:1px solid var(--border);border-radius:var(--r-sm);
+              padding:.65rem .75rem;text-align:center;font-size:.78rem}
+    .vol-letter{font-size:1rem;font-weight:700;color:var(--primary);margin-bottom:.3rem}
+    .vol-bar{height:4px;background:var(--bg-hover);border-radius:2px;overflow:hidden;margin:.35rem 0}
+    .vol-fill{height:100%;border-radius:2px;transition:width .3s}
+
+    /* ══════════════════════════════════════════════════════════
+       BADGES
+       ══════════════════════════════════════════════════════════ */
+    .badge{display:inline-flex;align-items:center;gap:.3rem;padding:.2rem .6rem;
+           border-radius:99px;font-size:.72rem;font-weight:600}
+    .badge.green{background:var(--success-soft);color:var(--success)}
+    .badge.amber{background:var(--warn-soft);color:var(--warn)}
+    .badge.blue{background:var(--primary-soft);color:var(--primary)}
+    .badge.red{background:var(--danger-soft);color:var(--danger)}
+    .badge-row{display:flex;gap:.4rem;flex-wrap:wrap;margin-bottom:.75rem}
+
+    /* ══════════════════════════════════════════════════════════
+       SEARCH PAGE
+       ══════════════════════════════════════════════════════════ */
+    .search-box{position:relative}
+    .search-box .search-icon{position:absolute;left:.85rem;top:50%;transform:translateY(-50%);
+                              color:var(--text-3);width:18px;height:18px;pointer-events:none}
+    .search-input{width:100%;padding:.85rem 1rem .85rem 2.75rem;font-size:1rem;
+                  border:1.5px solid var(--border);border-radius:var(--r);background:var(--bg-input);
+                  color:var(--text);outline:none;font-family:inherit;transition:all .2s}
+    .search-input:focus{border-color:var(--primary);box-shadow:0 0 0 4px rgba(61,21,203,.12)}
+    .search-input::placeholder{color:var(--text-3)}
+    .recent-tags{display:flex;gap:.4rem;flex-wrap:wrap;margin-top:.75rem}
+    .recent-tag{font-size:.75rem;padding:.3rem .65rem;background:var(--bg-hover);
+                border-radius:99px;cursor:pointer;color:var(--text-2);transition:all .15s;
+                border:1px solid transparent;max-width:200px;overflow:hidden;text-overflow:ellipsis;
+                white-space:nowrap}
+    .recent-tag:hover{border-color:var(--primary);color:var(--primary);background:var(--primary-soft)}
+    .answer-card{margin-top:1.5rem;padding:1.25rem 1.5rem;background:var(--bg-card);
+                 border:1px solid var(--border);border-left:4px solid var(--primary);
+                 border-radius:var(--r);line-height:1.7;font-size:.9rem;white-space:pre-wrap;
+                 box-shadow:var(--sh)}
+    .sources-grid{display:grid;gap:.6rem;margin-top:1rem}
+    .source-card{display:flex;align-items:flex-start;gap:.75rem;padding:.85rem 1rem;
+                 background:var(--bg-card);border:1px solid var(--border);border-radius:var(--r-sm);
+                 transition:border-color .15s;cursor:default}
+    .source-card:hover{border-color:var(--primary)}
+    .source-num{width:24px;height:24px;background:var(--primary-soft);color:var(--primary);
+                border-radius:50%;display:flex;align-items:center;justify-content:center;
+                font-size:.7rem;font-weight:700;flex-shrink:0}
+    .source-body{flex:1;min-width:0}
+    .source-path{font-weight:600;font-size:.8rem;color:var(--primary);word-break:break-all}
+    .source-text{font-size:.78rem;color:var(--text-3);margin-top:.3rem;
+                 display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;
+                 cursor:pointer;transition:all .2s}
+    .source-text.expanded{-webkit-line-clamp:unset;display:block}
+    .source-expand-hint{font-size:.65rem;color:var(--primary);cursor:pointer;margin-top:.15rem;
+                        display:inline-block;opacity:.7}
+    .source-expand-hint:hover{opacity:1}
+    .source-copy{appearance:none;border:none;background:none;color:var(--text-3);cursor:pointer;
+                 padding:4px;border-radius:4px;transition:all .15s;flex-shrink:0}
+    .source-copy:hover{color:var(--primary);background:var(--primary-soft)}
+    .source-copy svg{width:14px;height:14px}
+
+    /* ══════════════════════════════════════════════════════════
+       EXPLORER
+       ══════════════════════════════════════════════════════════ */
+    .explorer-bar{display:flex;gap:.5rem;margin-bottom:1rem;align-items:center}
+    .explorer-bar .input{max-width:280px}
+    .folder-group{border:1px solid var(--border);border-radius:var(--r-sm);overflow:hidden;
+                  margin-bottom:.5rem;background:var(--bg-card)}
+    .folder-hdr{padding:.6rem .85rem;background:var(--bg-input);cursor:pointer;font-weight:600;
+                font-size:.85rem;display:flex;justify-content:space-between;align-items:center;
+                transition:background .15s;user-select:none}
+    .folder-hdr:hover{background:var(--bg-hover)}
+    .folder-hdr .arrow{transition:transform .2s;color:var(--text-3)}
+    .folder-hdr .arrow.open{transform:rotate(90deg)}
+    .folder-files{display:none;border-top:1px solid var(--border)}
+    .folder-files.open{display:block}
+    .file-row{display:flex;justify-content:space-between;align-items:center;
+              padding:.4rem .85rem .4rem 1.5rem;font-size:.8rem;transition:background .1s;
+              border-bottom:1px solid var(--bg-hover)}
+    .file-row:last-child{border-bottom:none}
+    .file-row:hover{background:var(--bg-hover)}
+    .file-name{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-right:.5rem;
+               display:flex;align-items:center;gap:.4rem}
+    .file-name .dot{width:8px;height:8px;border-radius:50%;flex-shrink:0}
+    .file-meta{color:var(--text-3);white-space:nowrap;font-size:.75rem}
+    .empty-state{text-align:center;padding:3rem 1rem;color:var(--text-3)}
+    .empty-state svg{width:48px;height:48px;margin:0 auto .75rem;opacity:.3}
+    .empty-state p{font-size:.9rem;margin-bottom:.25rem}
+
+    /* ══════════════════════════════════════════════════════════
+       INSIGHTS / CHARTS
+       ══════════════════════════════════════════════════════════ */
+    .charts-row{display:grid;grid-template-columns:1fr 1fr;gap:1rem;margin-bottom:1.5rem}
+    @media(max-width:800px){.charts-row{grid-template-columns:1fr}}
+    .chart-card{background:var(--bg-card);border:1px solid var(--border);border-radius:var(--r);
+                padding:1.25rem;box-shadow:var(--sh)}
+    .chart-card h3{font-size:.85rem;font-weight:600;margin-bottom:.75rem;color:var(--text-2)}
+    .chart-wrap{position:relative;height:220px}
+    table{width:100%;border-collapse:collapse;font-size:.8rem}
+    th{text-align:left;padding:.55rem .75rem;background:var(--bg-input);color:var(--text-3);
+       font-weight:600;font-size:.72rem;text-transform:uppercase;letter-spacing:.04em;
+       border-bottom:1px solid var(--border)}
+    td{padding:.55rem .75rem;border-bottom:1px solid var(--border)}
+    tr:hover td{background:var(--bg-hover)}
+    .table-card{background:var(--bg-card);border:1px solid var(--border);border-radius:var(--r);
+                overflow:hidden;box-shadow:var(--sh)}
+    .table-card+.table-card{margin-top:1rem}
+    .table-card h3{font-size:.85rem;font-weight:600;padding:1rem 1.25rem .5rem;color:var(--text-2)}
+    .table-path{max-width:400px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+    /* ══════════════════════════════════════════════════════════
+       TOAST SYSTEM
+       ══════════════════════════════════════════════════════════ */
+    #toast-container{position:fixed;bottom:1.25rem;right:1.25rem;z-index:9999;
+                     display:flex;flex-direction:column-reverse;gap:.5rem;pointer-events:none}
+    .toast{display:flex;align-items:center;gap:.6rem;padding:.7rem 1rem;min-width:280px;
+           background:var(--bg-card);border:1px solid var(--border);border-radius:var(--r-sm);
+           box-shadow:var(--sh-lg);font-size:.8rem;pointer-events:auto;
+           animation:toastIn .3s ease,toastOut .3s ease 3.7s forwards}
+    .toast.success{border-left:3px solid var(--success)}
+    .toast.error{border-left:3px solid var(--danger)}
+    .toast.info{border-left:3px solid var(--primary)}
+    .toast svg{width:16px;height:16px;flex-shrink:0}
+    .toast.success svg{color:var(--success)}
+    .toast.error svg{color:var(--danger)}
+    .toast.info svg{color:var(--primary)}
+    .toast span{flex:1}
+    @keyframes toastIn{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:none}}
+    @keyframes toastOut{to{opacity:0;transform:translateX(16px)}}
+
+    /* ══════════════════════════════════════════════════════════
+       COMMAND PALETTE
+       ══════════════════════════════════════════════════════════ */
+    .cmd-overlay{position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:100;
+                 display:flex;align-items:flex-start;justify-content:center;padding-top:18vh;
+                 backdrop-filter:blur(4px);animation:fadeIn .15s ease}
+    .cmd-box{width:520px;background:var(--bg-card);border:1px solid var(--border);
+             border-radius:var(--r-lg);box-shadow:var(--sh-lg);overflow:hidden}
+    .cmd-box input{width:100%;padding:1rem 1.25rem;font-size:1rem;border:none;
+                   background:transparent;color:var(--text);outline:none;font-family:inherit}
+    .cmd-box input::placeholder{color:var(--text-3)}
+    @keyframes fadeIn{from{opacity:0}to{opacity:1}}
+
+    /* ══════════════════════════════════════════════════════════
+       STATUS BAR
+       ══════════════════════════════════════════════════════════ */
+    .status-bar{background:var(--bg-sidebar);border-top:1px solid var(--border);
+                padding:.3rem 1.5rem;font-size:.7rem;color:var(--text-3);
+                display:flex;justify-content:space-between;user-select:none;flex-shrink:0}
+    .status-bar span{display:inline-flex;align-items:center;gap:.25rem}
+    .status-dot{width:6px;height:6px;border-radius:50%;display:inline-block}
+    .status-dot.green{background:var(--success)}
+    .status-dot.amber{background:var(--warn)}
+
+    /* ══════════════════════════════════════════════════════════
+       LOADING SKELETON
+       ══════════════════════════════════════════════════════════ */
+    .skeleton{background:linear-gradient(90deg,var(--bg-hover) 25%,var(--bg-input) 50%,var(--bg-hover) 75%);
+              background-size:200% 100%;animation:skeleton 1.5s infinite;border-radius:var(--r-sm)}
+    @keyframes skeleton{0%{background-position:200% 0}100%{background-position:-200% 0}}
+    .skeleton-line{height:14px;margin-bottom:.5rem;border-radius:4px}
+    .skeleton-line:last-child{width:60%}
+
+    /* ══════════════════════════════════════════════════════════
+       LOW-OVERHEAD ANIMATIONS
+       ══════════════════════════════════════════════════════════ */
+    @keyframes pulse-glow{0%,100%{box-shadow:0 0 0 0 rgba(61,21,203,.25)}50%{box-shadow:0 0 0 6px rgba(61,21,203,0)}}
+    @keyframes slide-in-left{from{opacity:0;transform:translateX(-12px)}to{opacity:1;transform:none}}
+    @keyframes scale-in{from{opacity:0;transform:scale(.95)}to{opacity:1;transform:none}}
+    .status-dot.amber{animation:pulse-glow 2s ease infinite}
+    .nav-item{transition:all .2s ease}
+    .sidebar-nav .nav-item:nth-child(1){animation:slide-in-left .3s ease .05s both}
+    .sidebar-nav .nav-item:nth-child(2){animation:slide-in-left .3s ease .1s both}
+    .sidebar-nav .nav-item:nth-child(3){animation:slide-in-left .3s ease .15s both}
+    .sidebar-nav .nav-item:nth-child(4){animation:slide-in-left .3s ease .2s both}
+    .sidebar-nav .nav-item:nth-child(5){animation:slide-in-left .3s ease .25s both}
+    .stat-chip{transition:transform .2s ease,box-shadow .2s ease}
+    .stat-chip:hover{transform:translateY(-2px);box-shadow:var(--sh-lg)}
+    .source-card{animation:scale-in .25s ease both}
+    .toast{animation:toastIn .3s cubic-bezier(.4,0,.2,1),toastOut .3s ease 3.7s forwards}
+    .btn{transition:all .2s cubic-bezier(.4,0,.2,1)}
+    .btn-primary:hover,.btn-danger:hover{transform:translateY(-1px);
+        box-shadow:0 4px 12px rgba(61,21,203,.2)}
+    .folder-hdr .arrow{transition:transform .25s cubic-bezier(.4,0,.2,1)}
+    .search-input{transition:border-color .25s ease,box-shadow .25s ease}
     </style>
 </head>
 <body>
-    <header>
-        <h1>🧠 Personal Memory Assistant</h1>
-    </header>
 
-    <div class="tabs">
-        <div class="tab active" onclick="switchTab('index-tab')">Index</div>
-        <div class="tab" onclick="switchTab('ask-tab')">Ask</div>
-        <div class="tab" onclick="switchTab('insights-tab'); fetchInsights();">Insights</div>
+<!-- ═══════════════════════════════════════════════════════════
+     SIDEBAR
+     ═══════════════════════════════════════════════════════════ -->
+<aside class="sidebar">
+    <div class="sidebar-logo">
+        <span class="logo-icon">🧠</span>
+        <span class="logo-text">PMA</span>
     </div>
 
-    <div class="container">
-        <!-- Index Tab -->
-        <div id="index-tab" class="tab-content active">
-            <h2>Add Folders to Memory</h2>
-            <p>Paste absolute paths to local folders you want to index.</p>
-            <div class="input-group">
-                <input type="text" id="folders" placeholder="e.g. C:/Users/Name/Documents">
-                <button onclick="startIndexing()">Index Folders</button>
+    <nav class="sidebar-nav">
+        <a class="nav-item active" onclick="switchPage('library',this)">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5A2.5 2.5 0 016.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 014 19.5v-15A2.5 2.5 0 016.5 2z"/></svg>
+            <span>Library</span>
+            <span class="nav-indexing-dot" id="nav-indexing-dot" title="Indexing in progress..."></span>
+        </a>
+        <a class="nav-item" onclick="switchPage('search',this)">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg>
+            <span>Search</span>
+            <span class="sidebar-kbd">Ctrl+K</span>
+        </a>
+        <a class="nav-item" onclick="switchPage('explorer',this)">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/></svg>
+            <span>Explorer</span>
+        </a>
+        <a class="nav-item" onclick="switchPage('insights',this)">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M18 20V10"/><path d="M12 20V4"/><path d="M6 20v-6"/></svg>
+            <span>Insights</span>
+        </a>
+    </nav>
+
+    <div class="sidebar-footer">
+        <button class="theme-btn" onclick="toggleTheme()" title="Toggle theme" aria-label="Toggle dark/light theme">
+            <svg id="theme-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M21 12.79A9 9 0 1111.21 3 7 7 0 0021 12.79z"/>
+            </svg>
+        </button>
+        <span class="sidebar-hint">v1.0</span>
+    </div>
+</aside>
+
+<!-- ═══════════════════════════════════════════════════════════
+     MAIN CONTENT
+     ═══════════════════════════════════════════════════════════ -->
+<div class="main">
+
+<!-- Global progress banner (visible on all pages) -->
+<div class="global-progress" id="global-progress" onclick="switchPage('library')">
+    <div class="gp-text">
+        <span class="gp-pct" id="gp-pct">0%</span>
+        <span id="gp-label">Indexing...</span>
+    </div>
+    <div class="gp-track"><div class="gp-fill active" id="gp-fill" style="width:0%"></div></div>
+    <span class="gp-file" id="gp-file"></span>
+    <div class="gp-stats">
+        <span><span class="gp-dot" style="background:var(--success)"></span> <span id="gp-new">0</span></span>
+        <span><span class="gp-dot" style="background:var(--warn)"></span> <span id="gp-changed">0</span></span>
+        <span><span class="gp-dot" style="background:var(--text-3)"></span> <span id="gp-skipped">0</span></span>
+    </div>
+</div>
+
+<!-- --- LIBRARY PAGE --- -->
+<div class="page active" id="page-library">
+    <div class="page-header">
+        <h1>📚 Library</h1>
+        <p>Index folders and files into your personal memory</p>
+    </div>
+
+    <!-- Quick stats -->
+    <div class="stats-row" id="lib-stats">
+        <div class="stat-chip">
+            <div class="stat-icon purple">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
             </div>
-            
-            <div class="progress-container" id="progress-container">
-                <div class="progress-bar" id="progress-bar"></div>
-            </div>
-            <p id="status-text">Status: Checking...</p>
-            
-            <hr style="margin: 2rem 0; border: none; border-top: 1px solid #e2e8f0;">
-            <h3>Quick Start</h3>
-            <button class="btn-secondary" onclick="seedDemo()">Seed Demo Data & Index</button>
+            <div class="stat-info"><div class="stat-val" id="s-files">0</div><div class="stat-label">Files</div></div>
         </div>
-
-        <!-- Ask Tab -->
-        <div id="ask-tab" class="tab-content">
-            <h2>Search Your Second Memory</h2>
-            <div class="input-group" style="flex-direction: column;">
-                <textarea id="question" placeholder="e.g. What feedback did I get on my OS project?"></textarea>
-                <button id="ask-btn" onclick="askQuestion()">Ask Question</button>
+        <div class="stat-chip">
+            <div class="stat-icon green">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 16V8a2 2 0 00-1-1.73l-7-4a2 2 0 00-2 0l-7 4A2 2 0 003 8v8a2 2 0 001 1.73l7 4a2 2 0 002 0l7-4A2 2 0 0021 16z"/></svg>
             </div>
-            
-            <div id="results-container" style="display: none;">
-                <h3>Answer</h3>
-                <div class="answer-box" id="answer-text"></div>
-                <div class="sources">
-                    <h4>Cited Sources</h4>
-                    <div id="sources-list"></div>
-                </div>
-            </div>
+            <div class="stat-info"><div class="stat-val" id="s-chunks">0</div><div class="stat-label">Chunks</div></div>
         </div>
-
-        <!-- Insights Tab -->
-        <div id="insights-tab" class="tab-content">
-            <h2>Memory Insights</h2>
-            <div class="stats-grid">
-                <div class="stat-card">
-                    <div class="stat-value" id="stat-files">0</div>
-                    <div class="stat-label">Files Indexed</div>
-                </div>
-                <div class="stat-card">
-                    <div class="stat-value" id="stat-size">0 MB</div>
-                    <div class="stat-label">Total Storage</div>
-                </div>
-                <div class="stat-card">
-                    <div class="stat-value" id="stat-chunks">0</div>
-                    <div class="stat-label">Text Chunks</div>
-                </div>
+        <div class="stat-chip">
+            <div class="stat-icon amber">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
             </div>
-
-            <h3>Largest Files</h3>
-            <table id="top-files-table">
-                <thead><tr><th>Path</th><th>Size (KB)</th></tr></thead>
-                <tbody></tbody>
-            </table>
-
-            <h3 style="margin-top: 2rem;">"Cold" Files (Never Used in Queries)</h3>
-            <table id="cold-files-table">
-                <thead><tr><th>Path</th><th>Size (KB)</th></tr></thead>
-                <tbody></tbody>
-            </table>
+            <div class="stat-info"><div class="stat-val" id="s-scan">—</div><div class="stat-label">Scan Mode</div></div>
         </div>
     </div>
 
-    <script>
-        function switchTab(tabId) {
-            document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
-            document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-            document.getElementById(tabId).classList.add('active');
-            event.currentTarget.classList.add('active');
+    <!-- Add to Memory card -->
+    <div class="card">
+        <div class="card-title">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14"/><path d="M5 12h14"/></svg>
+            Add to Memory
+        </div>
+
+        <div style="display:flex;gap:.5rem;margin-bottom:.75rem;flex-wrap:wrap">
+            <button class="btn btn-primary" onclick="pickFolder()">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/><line x1="12" y1="11" x2="12" y2="17"/><line x1="9" y1="14" x2="15" y2="14"/></svg>
+                Select Folder
+            </button>
+            <button class="btn btn-secondary" onclick="pickFiles()">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="12" y1="18" x2="12" y2="12"/><line x1="9" y1="15" x2="15" y2="15"/></svg>
+                Select Files
+            </button>
+        </div>
+
+        <div class="input-row">
+            <input type="text" id="folders-input" class="input" placeholder="Or paste paths (comma-separated)  e.g. C:\Users\Name\Documents" aria-label="Folder paths to index">
+            <button class="btn btn-success btn-lg" id="index-btn" onclick="startIndexing()" aria-label="Start indexing folders">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 16 12 12 8 16"/><line x1="12" y1="12" x2="12" y2="21"/><path d="M20.39 18.39A5 5 0 0018 9h-1.26A8 8 0 103 16.3"/></svg>
+                Index
+            </button>
+        </div>
+
+        <!-- Drop zone -->
+        <div class="drop-zone" id="drop-zone" onclick="pickFolder()">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+            <p>Click to browse or drag folders here</p>
+            <small>Supported: .txt, .md, .py, .js, .pdf and more</small>
+        </div>
+
+        <!-- Progress -->
+        <div class="progress-section" id="progress-section">
+            <div class="progress-track"><div class="progress-fill active" id="progress-fill" style="width:0%"></div></div>
+            <div class="progress-info">
+                <span id="progress-label">Indexing...</span>
+                <span id="progress-pct">0%</span>
+            </div>
+            <div class="progress-detail">
+                <span class="progress-file" id="progress-file" title=""></span>
+                <span id="progress-count">0 / 0 files</span>
+            </div>
+            <div class="progress-stats">
+                <span class="ps"><span class="ps-dot" style="background:var(--success)"></span> New: <strong id="ps-new">0</strong></span>
+                <span class="ps"><span class="ps-dot" style="background:var(--warn)"></span> Changed: <strong id="ps-changed">0</strong></span>
+                <span class="ps"><span class="ps-dot" style="background:var(--text-3)"></span> Skipped: <strong id="ps-skipped">0</strong></span>
+                <span class="ps"><span class="ps-dot" style="background:var(--primary)"></span> Chunks: <strong id="ps-chunks">0</strong></span>
+            </div>
+        </div>
+    </div>
+
+    <!-- System info card -->
+    <div class="card" id="sys-card" style="display:none">
+        <div class="card-title">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
+            System
+        </div>
+        <div class="badge-row" id="sys-badges"></div>
+        <div class="vol-grid" id="vol-grid"></div>
+    </div>
+
+    <!-- Quick start -->
+    <div class="card">
+        <div class="card-title">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+            Quick Start
+        </div>
+        <p style="font-size:.85rem;color:var(--text-2);margin-bottom:.75rem">Load sample documents to test the system instantly.</p>
+        <div style="display:flex;gap:.5rem;flex-wrap:wrap">
+        <button class="btn btn-secondary" id="seed-btn" onclick="seedDemo()">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 00-1-1.73l-7-4a2 2 0 00-2 0l-7 4A2 2 0 003 8v8a2 2 0 001 1.73l7 4a2 2 0 002 0l7-4A2 2 0 0021 16z"/></svg>
+            Seed Demo Data
+        </button>
+        <button class="btn btn-ghost" onclick="cleanupStale()" title="Remove entries for deleted files">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"/></svg>
+            Cleanup Stale
+        </button>
+        <button class="btn btn-ghost" onclick="exportIndex()" title="Export index as JSON">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+            Export
+        </button>
+        <button class="btn btn-danger" onclick="clearDatabase()" title="Permanently erase all indexed data">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg>
+            Clear Database
+        </button>
+        </div>
+    </div>
+</div>
+
+<!-- ─── SEARCH PAGE ─── -->
+<div class="page" id="page-search">
+    <div class="page-header">
+        <h1>🔍 Search</h1>
+        <p>Ask questions about your indexed files — powered by RAG</p>
+    </div>
+
+    <div class="card">
+        <div class="search-box">
+            <svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg>
+            <input type="text" class="search-input" id="search-input" placeholder="Ask anything about your files..." autocomplete="off" aria-label="Search your indexed files">
+        </div>
+        <div class="recent-tags" id="recent-tags"></div>
+        <div style="margin-top:.75rem;display:flex;gap:.5rem;align-items:center;flex-wrap:wrap">
+            <button class="btn btn-primary btn-lg" id="ask-btn" onclick="askQuestion()" aria-label="Submit question">
+                Ask Question
+            </button>
+            <select class="input" id="filter-type" style="width:auto;min-width:100px;padding:.45rem .65rem;font-size:.78rem" aria-label="Filter by file type">
+                <option value="">All types</option>
+                <option value=".txt">.txt</option>
+                <option value=".md">.md</option>
+                <option value=".pdf">.pdf</option>
+                <option value=".py">.py</option>
+                <option value=".js">.js</option>
+                <option value=".docx">.docx</option>
+                <option value=".json">.json</option>
+                <option value=".csv">.csv</option>
+            </select>
+            <span style="font-size:.72rem;color:var(--text-3)">Press Enter to search</span>
+        </div>
+    </div>
+
+    <div id="results-area" style="display:none">
+        <div style="margin-top:1.5rem">
+            <h2 style="display:flex;align-items:center;gap:.5rem">Answer <span id="latency-badge" class="badge blue" style="font-size:.65rem;display:none"></span></h2>
+            <div class="answer-card" id="answer-text"></div>
+        </div>
+        <div style="margin-top:1.25rem">
+            <h2>Sources <span id="source-count" style="font-size:.72rem;color:var(--text-3)"></span></h2>
+            <div class="sources-grid" id="sources-list"></div>
+        </div>
+    </div>
+</div>
+
+<!-- ─── EXPLORER PAGE ─── -->
+<div class="page" id="page-explorer">
+    <div class="page-header">
+        <h1>📂 Explorer</h1>
+        <p id="explorer-summary">Browse your indexed files</p>
+    </div>
+
+    <div class="explorer-bar">
+        <input type="text" class="input" id="explorer-filter" placeholder="Filter files..." oninput="debouncedFilterTree(this.value)" aria-label="Filter indexed files">
+        <button class="btn btn-secondary btn-icon" onclick="fetchFileTree()" title="Refresh">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/></svg>
+        </button>
+    </div>
+
+    <div id="file-tree"></div>
+</div>
+
+<!-- ─── INSIGHTS PAGE ─── -->
+<div class="page" id="page-insights">
+    <div class="page-header">
+        <h1>📊 Insights</h1>
+        <p>Visualize your personal memory at a glance</p>
+    </div>
+
+    <div class="stats-row">
+        <div class="stat-chip">
+            <div class="stat-icon purple">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+            </div>
+            <div class="stat-info"><div class="stat-val" id="i-files">0</div><div class="stat-label">Files</div></div>
+        </div>
+        <div class="stat-chip">
+            <div class="stat-icon green">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 16V8a2 2 0 00-1-1.73l-7-4a2 2 0 00-2 0l-7 4A2 2 0 003 8v8a2 2 0 001 1.73l7 4a2 2 0 002 0l7-4A2 2 0 0021 16z"/></svg>
+            </div>
+            <div class="stat-info"><div class="stat-val" id="i-size">0 MB</div><div class="stat-label">Storage</div></div>
+        </div>
+        <div class="stat-chip">
+            <div class="stat-icon amber">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 20V10"/><path d="M12 20V4"/><path d="M6 20v-6"/></svg>
+            </div>
+            <div class="stat-info"><div class="stat-val" id="i-chunks">0</div><div class="stat-label">Chunks</div></div>
+        </div>
+        <div class="stat-chip">
+            <div class="stat-icon red">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18.36 6.64a9 9 0 11-12.73 0"/><line x1="12" y1="2" x2="12" y2="12"/></svg>
+            </div>
+            <div class="stat-info"><div class="stat-val" id="i-cold">0</div><div class="stat-label">Cold Files</div></div>
+        </div>
+    </div>
+
+    <!-- Charts -->
+    <div class="charts-row">
+        <div class="chart-card">
+            <h3>File Type Distribution</h3>
+            <div class="chart-wrap"><canvas id="type-chart"></canvas></div>
+        </div>
+        <div class="chart-card">
+            <h3>Storage by Folder</h3>
+            <div class="chart-wrap"><canvas id="folder-chart"></canvas></div>
+        </div>
+    </div>
+
+    <!-- Tables -->
+    <div class="table-card">
+        <h3>Largest Files</h3>
+        <table><thead><tr><th>Path</th><th style="width:100px;text-align:right">Size</th></tr></thead>
+        <tbody id="top-files-body"></tbody></table>
+    </div>
+    <div class="table-card">
+        <h3>Cold Files — Never Referenced</h3>
+        <table><thead><tr><th>Path</th><th style="width:100px;text-align:right">Size</th></tr></thead>
+        <tbody id="cold-files-body"></tbody></table>
+    </div>
+</div>
+
+<!-- Status bar -->
+<div class="status-bar">
+    <span><span class="status-dot green" id="status-dot"></span> <span id="sb-status">Ready</span></span>
+    <span id="sb-scan">Scan: —</span>
+    <span id="sb-files">Files: 0</span>
+    <span id="sb-chunks">Chunks: 0</span>
+</div>
+
+</div><!-- /main -->
+
+<!-- Toast container -->
+<div id="toast-container"></div>
+
+<!-- Command palette -->
+<div id="cmd-overlay" class="cmd-overlay" style="display:none" onclick="closeCmdPalette(event)">
+    <div class="cmd-box">
+        <input type="text" id="cmd-input" placeholder="Search your memory..." onkeydown="if(event.key==='Enter'){event.preventDefault();runCmdSearch()}" onkeyup="if(event.key==='Escape')closeCmdPalette()">
+    </div>
+</div>
+
+<script>
+/* ════════════════════════════════════════════════════════════
+   UTILITIES
+   ════════════════════════════════════════════════════════════ */
+function fmt(bytes){
+    if(!bytes||bytes===0)return '0 B';
+    const k=1024,u=['B','KB','MB','GB','TB'];
+    const i=Math.floor(Math.log(bytes)/Math.log(k));
+    return parseFloat((bytes/Math.pow(k,i)).toFixed(1))+' '+u[i];
+}
+
+const EXT_COLORS = {'.py':'#3572A5','.js':'#f1e05a','.ts':'#3178c6','.md':'#083fa1',
+    '.txt':'#6b7280','.json':'#292929','.html':'#e34c26','.css':'#563d7c',
+    '.pdf':'#e11d48','.java':'#b07219','.c':'#555555','.cpp':'#f34b7d','.rs':'#dea584'};
+function extColor(name){
+    const ext='.'+name.split('.').pop().toLowerCase();
+    return EXT_COLORS[ext]||'var(--text-3)';
+}
+
+/* ════════════════════════════════════════════════════════════
+   TOAST NOTIFICATIONS
+   ════════════════════════════════════════════════════════════ */
+function toast(msg,type='info'){
+    const c=document.getElementById('toast-container');
+    const iconPaths={
+        success:'<polyline points="20 6 9 17 4 12"/>',
+        error:'<circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/>',
+        info:'<circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/>'
+    };
+    const el=document.createElement('div');
+    el.className='toast '+type;
+    // Use DOM methods instead of innerHTML to prevent XSS
+    const svg=document.createElementNS('http://www.w3.org/2000/svg','svg');
+    svg.setAttribute('viewBox','0 0 24 24');svg.setAttribute('fill','none');
+    svg.setAttribute('stroke','currentColor');svg.setAttribute('stroke-width','2');
+    svg.setAttribute('stroke-linecap','round');svg.setAttribute('stroke-linejoin','round');
+    svg.innerHTML=iconPaths[type]||iconPaths.info;
+    const span=document.createElement('span');
+    span.textContent=msg;
+    el.appendChild(svg);el.appendChild(span);
+    c.appendChild(el);
+    setTimeout(()=>el.remove(),4200);
+}
+
+/* ════════════════════════════════════════════════════════════
+   NAVIGATION
+   ════════════════════════════════════════════════════════════ */
+function switchPage(id,el){
+    document.querySelectorAll('.page').forEach(p=>p.classList.remove('active'));
+    document.querySelectorAll('.nav-item').forEach(n=>n.classList.remove('active'));
+    document.getElementById('page-'+id).classList.add('active');
+    if(el)el.classList.add('active');
+    else document.querySelector(`.nav-item[onclick*="${id}"]`)?.classList.add('active');
+
+    // Load data for pages
+    if(id==='explorer')fetchFileTree();
+    if(id==='insights')fetchInsights();
+}
+
+/* ════════════════════════════════════════════════════════════
+   THEME
+   ════════════════════════════════════════════════════════════ */
+function toggleTheme(){
+    const html=document.documentElement;
+    const next=html.getAttribute('data-theme')==='dark'?'light':'dark';
+    html.setAttribute('data-theme',next);
+    localStorage.setItem('pma-theme',next);
+    updateThemeIcon(next);
+    // Update charts if they exist
+    if(window._typeChart)updateChartTheme();
+}
+function updateThemeIcon(theme){
+    const icon=document.getElementById('theme-icon');
+    icon.innerHTML = theme==='dark'
+        ? '<circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/>'
+        : '<path d="M21 12.79A9 9 0 1111.21 3 7 7 0 0021 12.79z"/>';
+}
+(function initTheme(){
+    const saved=localStorage.getItem('pma-theme');
+    if(saved){document.documentElement.setAttribute('data-theme',saved);updateThemeIcon(saved);}
+})();
+
+/* ════════════════════════════════════════════════════════════
+   FILE / FOLDER PICKER
+   ════════════════════════════════════════════════════════════ */
+async function pickFolder(){
+    try{
+        const res=await fetch('/pick/folder');
+        const data=await res.json();
+        if(data.path){
+            const input=document.getElementById('folders-input');
+            input.value=input.value?(input.value+', '+data.path):data.path;
+            toast('Folder selected: '+data.path.split(/[/\\]/).pop(),'success');
+        }
+    }catch(e){toast('Could not open folder picker','error');}
+}
+
+async function pickFiles(){
+    try{
+        const res=await fetch('/pick/file');
+        const data=await res.json();
+        if(data.paths&&data.paths.length){
+            const input=document.getElementById('folders-input');
+            // Extract parent folders from selected files
+            const folders=[...new Set(data.paths.map(p=>{
+                const sep=p.includes('/')?'/':'\\';
+                return p.substring(0,p.lastIndexOf(sep));
+            }))];
+            const val=folders.join(', ');
+            input.value=input.value?(input.value+', '+val):val;
+            toast(data.paths.length+' file(s) selected','success');
+        }
+    }catch(e){toast('Could not open file picker','error');}
+}
+
+/* ════════════════════════════════════════════════════════════
+   DRAG & DROP
+   ════════════════════════════════════════════════════════════ */
+(function initDrop(){
+    const zone=document.getElementById('drop-zone');
+    if(!zone)return;
+    ['dragenter','dragover'].forEach(e=>zone.addEventListener(e,ev=>{ev.preventDefault();zone.classList.add('drag-over');}));
+    ['dragleave','drop'].forEach(e=>zone.addEventListener(e,ev=>{ev.preventDefault();zone.classList.remove('drag-over');}));
+    zone.addEventListener('drop',ev=>{
+        const items=ev.dataTransfer.files;
+        if(!items.length)return;
+        // In desktop (pywebview/Electron) we can get paths
+        const paths=[];
+        for(const f of items){
+            if(f.path) paths.push(f.path);
+            else if(f.name) paths.push(f.name);
+        }
+        if(paths.length){
+            // Get parent folders
+            const folders=[...new Set(paths.map(p=>{
+                const sep=p.includes('/')?'/':'\\';
+                const idx=p.lastIndexOf(sep);
+                return idx>0?p.substring(0,idx):p;
+            }))];
+            const input=document.getElementById('folders-input');
+            input.value=input.value?(input.value+', '+folders.join(', ')):folders.join(', ');
+            toast(folders.length+' path(s) added','success');
+        }
+    });
+})();
+
+/* ════════════════════════════════════════════════════════════
+   INDEXING
+   ════════════════════════════════════════════════════════════ */
+async function startIndexing(){
+    const input=document.getElementById('folders-input').value;
+    const folders=input.split(',').map(f=>f.trim().replace(/^["'](.+)["']$/,'$1')).filter(f=>f);
+    if(!folders.length){toast('Enter at least one folder path','error');return;}
+
+    const btn=document.getElementById('index-btn');
+    btn.disabled=true;
+
+    try{
+        const res=await fetch('/index/start',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({folders})});
+        if(!res.ok){const d=await res.json();toast(d.error||'Indexing failed','error');btn.disabled=false;return;}
+        toast('Indexing started','success');
+        
+        // Show progress bars immediately
+        document.getElementById('global-progress').classList.add('visible');
+        document.getElementById('global-progress').classList.remove('gp-done');
+        document.getElementById('gp-label').textContent='Starting index...';
+        document.getElementById('progress-section').classList.add('visible');
+        document.getElementById('progress-label').textContent='Starting...';
+        document.getElementById('nav-indexing-dot').classList.add('active');
+        
+        startProgressStream();
+    }catch(e){toast('Failed to start indexing','error');btn.disabled=false;}
+}
+
+async function seedDemo(){
+    const btn=document.getElementById('seed-btn');
+    btn.disabled=true;
+    try{
+        const res=await fetch('/demo/seed',{method:'POST'});
+        const data=await res.json();
+        toast(data.message,'success');
+        document.getElementById('folders-input').value=data.folder;
+        
+        // Show progress bars immediately
+        document.getElementById('global-progress').classList.add('visible');
+        document.getElementById('global-progress').classList.remove('gp-done');
+        document.getElementById('gp-label').textContent='Starting demo index...';
+        document.getElementById('progress-section').classList.add('visible');
+        document.getElementById('progress-label').textContent='Starting...';
+        document.getElementById('nav-indexing-dot').classList.add('active');
+        
+        startProgressStream();
+    }catch(e){toast('Failed to seed demo data','error');}
+    finally{btn.disabled=false;}
+}
+
+async function cleanupStale(){
+    try{
+        const res=await fetch('/index/cleanup',{method:'POST'});
+        const data=await res.json();
+        if(!res.ok){toast(data.error||'Cleanup failed','error');return;}
+        toast(`Cleanup done — ${data.removed_count} stale entries removed`,'success');
+        fetchStatus();
+    }catch(e){toast('Cleanup request failed','error');}
+}
+
+async function exportIndex(){
+    try{
+        const res=await fetch('/index/export');
+        const data=await res.json();
+        const blob=new Blob([JSON.stringify(data,null,2)],{type:'application/json'});
+        const url=URL.createObjectURL(blob);
+        const a=document.createElement('a');
+        a.href=url;a.download='pma-index-export.json';a.click();
+        URL.revokeObjectURL(url);
+        toast('Index exported','success');
+    }catch(e){toast('Export failed','error');}
+}
+
+async function clearDatabase(){
+    if(!confirm('⚠️ CLEAR DATABASE\n\nThis will permanently delete ALL indexed files, chunks, embeddings, and query history.\n\nThis action cannot be undone. Continue?'))return;
+    if(!confirm('Are you absolutely sure? Type OK to confirm this destructive action.'))return;
+    try{
+        const res=await fetch('/index/clear',{method:'POST'});
+        const data=await res.json();
+        if(!res.ok){toast(data.error||'Clear failed','error');return;}
+        toast(`Database cleared — ${data.files_removed} files, ${data.chunks_removed} chunks removed`,'success');
+        // Reset UI counters
+        document.getElementById('s-files').textContent='0';
+        document.getElementById('s-chunks').textContent='0';
+        document.getElementById('sb-files').textContent='Files: 0';
+        document.getElementById('sb-chunks').textContent='Chunks: 0';
+        fetchStatus();
+    }catch(e){toast('Clear database request failed','error');}
+}
+
+/* ── SSE real-time progress stream ─────────────────────────── */
+let _evtSource=null;
+function startProgressStream(){
+    // Close any existing connection
+    if(_evtSource){_evtSource.close();_evtSource=null;}
+    _evtSource=new EventSource('/index/progress-stream');
+    _evtSource.addEventListener('progress',e=>{
+        try{const d=JSON.parse(e.data);updateProgress(d);}catch{}
+    });
+    _evtSource.onerror=()=>{
+        _evtSource.close();_evtSource=null;
+        // Fallback: fetch final status
+        setTimeout(fetchStatus,1000);
+    };
+}
+
+function updateProgress(d){
+    if(d.scan_method){
+        const label=d.scan_method==='ntfs_mft'?'MFT':'scandir';
+        document.getElementById('s-scan').textContent=label;
+        const dur=d.scan_duration_ms>0?` (${(d.scan_duration_ms/1000).toFixed(1)}s)`:'';
+        document.getElementById('sb-scan').textContent='Scan: '+label+dur;
+    }
+
+    const section=document.getElementById('progress-section');
+    const fill=document.getElementById('progress-fill');
+    const labelEl=document.getElementById('progress-label');
+    const pctEl=document.getElementById('progress-pct');
+    const indexBtn=document.getElementById('index-btn');
+    const dot=document.getElementById('status-dot');
+
+    // Detailed progress elements
+    const fileEl=document.getElementById('progress-file');
+    const countEl=document.getElementById('progress-count');
+    const psNew=document.getElementById('ps-new');
+    const psChanged=document.getElementById('ps-changed');
+    const psSkipped=document.getElementById('ps-skipped');
+    const psChunks=document.getElementById('ps-chunks');
+
+    // Global banner elements
+    const gp=document.getElementById('global-progress');
+    const gpFill=document.getElementById('gp-fill');
+    const gpPct=document.getElementById('gp-pct');
+    const gpLabel=document.getElementById('gp-label');
+    const gpFile=document.getElementById('gp-file');
+    const gpNew=document.getElementById('gp-new');
+    const gpChanged=document.getElementById('gp-changed');
+    const gpSkipped=document.getElementById('gp-skipped');
+    const navDot=document.getElementById('nav-indexing-dot');
+
+    if(d.status==='running'){
+        // ── In-page progress section ──
+        section.classList.add('visible');
+        fill.style.width=d.progress_percent+'%';
+        fill.classList.add('active');
+        labelEl.textContent=`Indexing -- ${d.new_files||0} new, ${d.changed_files||0} changed, ${d.skipped_files||0} skipped`;
+        pctEl.textContent=d.progress_percent+'%';
+        indexBtn.disabled=true;
+        dot.className='status-dot amber';
+        document.getElementById('sb-status').textContent='Indexing...';
+
+        if(fileEl&&d.current_file){
+            const short=d.current_file.split(/[/\\]/).pop();
+            fileEl.textContent=short;fileEl.title=d.current_file;
+        }
+        if(countEl)countEl.textContent=`${d.processed_files||0} / ${d.total_files||0} files`;
+        if(psNew)psNew.textContent=d.new_files||0;
+        if(psChanged)psChanged.textContent=d.changed_files||0;
+        if(psSkipped)psSkipped.textContent=d.skipped_files||0;
+        if(psChunks)psChunks.textContent=d.total_chunks||0;
+
+        // ── Global banner ──
+        gp.classList.add('visible');
+        gp.classList.remove('gp-done');
+        gpFill.style.width=d.progress_percent+'%';
+        gpFill.classList.add('active');
+        gpPct.textContent=d.progress_percent+'%';
+        gpLabel.textContent=`Indexing ${d.processed_files||0} / ${d.total_files||0} files`;
+        if(d.current_file){
+            const short=d.current_file.split(/[/\\]/).pop();
+            gpFile.textContent=short;gpFile.title=d.current_file;
+        }
+        gpNew.textContent=d.new_files||0;
+        gpChanged.textContent=d.changed_files||0;
+        gpSkipped.textContent=d.skipped_files||0;
+
+        // ── Sidebar dot ──
+        navDot.classList.add('active');
+
+    }else{
+        // ── In-page progress section ──
+        fill.classList.remove('active');
+        fill.style.width='100%';
+        indexBtn.disabled=false;
+        if(section.classList.contains('visible')){
+            labelEl.textContent='Indexing complete';
+            pctEl.textContent='100%';
+            if(countEl)countEl.textContent=`${d.processed_files||0} / ${d.total_files||0} files`;
+            setTimeout(()=>section.classList.remove('visible'),5000);
+        }
+        dot.className='status-dot green';
+        document.getElementById('sb-status').textContent='Ready';
+
+        // ── Global banner — show "Complete" then auto-hide ──
+        if(gp.classList.contains('visible')){
+            gp.classList.add('gp-done');
+            gpFill.classList.remove('active');
+            gpFill.style.width='100%';
+            gpPct.textContent='100%';
+            gpLabel.textContent=`Done -- ${d.processed_files||0} files indexed`;
+            gpFile.textContent='';
+            setTimeout(()=>{gp.classList.remove('visible','gp-done');},5000);
+            
+            // Because indexing just finished, auto-refresh explorer and insights
+            if(window.getComputedStyle(document.getElementById('page-explorer')).display !== 'none') fetchFileTree();
+            if(window.getComputedStyle(document.getElementById('page-insights')).display !== 'none') fetchInsights();
         }
 
-        async function startIndexing() {
-            const input = document.getElementById('folders').value;
-            // Strip quotes and whitespace from each folder
-            const folders = input.split(',').map(f => f.trim().replace(/^["'](.+)["']$/, '$1')).filter(f => f);
-            if(!folders.length) return alert("Enter folder path");
-            
-            const btn = document.querySelector('#index-tab button');
-            btn.disabled = true;
-            btn.innerText = "Indexing Started...";
+        // ── Sidebar dot ──
+        navDot.classList.remove('active');
 
-            await fetch('/index/start', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({folders})
+        // Refresh global data when complete
+        setTimeout(fetchStatus, 300);
+
+        // Close SSE when idle
+        if(_evtSource){_evtSource.close();_evtSource=null;}
+    }
+}
+
+/* ── Fallback status fetch (used on boot & after SSE close) ── */
+async function fetchStatus(){
+    try{
+        const res=await fetch('/index/status');
+        if(!res.ok)return;
+        const d=await res.json();
+        document.getElementById('s-files').textContent=d.files_indexed||0;
+        document.getElementById('s-chunks').textContent=d.chunks_indexed||0;
+        document.getElementById('sb-files').textContent='Files: '+(d.files_indexed||0);
+        document.getElementById('sb-chunks').textContent='Chunks: '+(d.chunks_indexed||0);
+        
+        // Also update Insights page stats 
+        if(document.getElementById('i-files')) {
+            document.getElementById('i-files').textContent=d.files_indexed||0;
+            document.getElementById('i-chunks').textContent=d.chunks_indexed||0;
+        }
+
+        if(d.scan_method){
+            const label=d.scan_method==='ntfs_mft'?'MFT':'scandir';
+            document.getElementById('s-scan').textContent=label;
+            const dur=d.scan_duration_ms>0?` (${(d.scan_duration_ms/1000).toFixed(1)}s)`:'';
+            document.getElementById('sb-scan').textContent='Scan: '+label+dur;
+        } else {
+            document.getElementById('s-scan').textContent='—';
+            document.getElementById('sb-scan').textContent='Scan: —';
+        }
+        
+        const dot=document.getElementById('status-dot');
+        if(d.status==='running'){
+            dot.className='status-dot amber';
+            document.getElementById('sb-status').textContent='Indexing...';
+            document.getElementById('nav-indexing-dot').classList.add('active');
+            document.getElementById('global-progress').classList.add('visible');
+            document.getElementById('global-progress').classList.remove('gp-done');
+            document.getElementById('progress-section').classList.add('visible');
+            startProgressStream();
+        }else{
+            dot.className='status-dot green';
+            document.getElementById('sb-status').textContent='Ready';
+            document.getElementById('nav-indexing-dot').classList.remove('active');
+            document.getElementById('global-progress').classList.remove('visible');
+        }
+    }catch{}
+}
+
+/* ════════════════════════════════════════════════════════════
+   SEARCH
+   ════════════════════════════════════════════════════════════ */
+function getHistory(){try{return JSON.parse(localStorage.getItem('pma-history')||'[]');}catch{return[];}}
+function addHistory(q){
+    let h=getHistory();
+    h=h.filter(x=>x!==q);
+    h.unshift(q);
+    if(h.length>10)h=h.slice(0,10);
+    localStorage.setItem('pma-history',JSON.stringify(h));
+    renderHistory();
+}
+function renderHistory(){
+    const c=document.getElementById('recent-tags');
+    const h=getHistory();
+    c.innerHTML='';
+    if(!h.length){c.innerHTML='<span style="font-size:.75rem;color:var(--text-3)">No recent searches</span>';return;}
+    h.slice(0,6).forEach(q=>{
+        const tag=document.createElement('span');
+        tag.className='recent-tag';
+        tag.textContent=q;
+        tag.title=q;
+        tag.onclick=()=>{document.getElementById('search-input').value=q;askQuestion();};
+        c.appendChild(tag);
+    });
+}
+
+async function askQuestion(){
+    const input=document.getElementById('search-input');
+    const question=input.value.trim();
+    if(!question)return;
+
+    const btn=document.getElementById('ask-btn');
+    btn.disabled=true;
+    btn.textContent='Searching…';
+    document.getElementById('results-area').style.display='none';
+
+    // Collect filter
+    const filterEl=document.getElementById('filter-type');
+    const file_type=filterEl?filterEl.value:null;
+    const body={question};
+    if(file_type)body.file_type=file_type;
+
+    try{
+        const res=await fetch('/query',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+        const data=await res.json();
+        if(!res.ok){toast(data.error||'Search failed','error');return;}
+
+        addHistory(question);
+
+        document.getElementById('results-area').style.display='block';
+        document.getElementById('answer-text').textContent=data.answer;
+
+        // Latency badge
+        const latBadge=document.getElementById('latency-badge');
+        if(latBadge&&data.latency_ms!=null){
+            latBadge.textContent=data.latency_ms.toFixed(0)+' ms';
+            latBadge.style.display='inline-flex';
+        }
+
+        // Source count
+        const srcCountEl=document.getElementById('source-count');
+        if(srcCountEl)srcCountEl.textContent=(data.sources||[]).length?`(${(data.sources||[]).length})`:'(0)';
+
+        const srcList=document.getElementById('sources-list');
+        srcList.innerHTML='';
+        (data.sources||[]).forEach((s,i)=>{
+            const card=document.createElement('div');
+            card.className='source-card';
+            card.innerHTML=`
+                <div class="source-num">${i+1}</div>
+                <div class="source-body">
+                    <div class="source-path">${escHtml(s.file_path)}</div>
+                    <div class="source-text">${escHtml(s.text||'')}</div>
+                    <div class="source-expand-hint">Click to expand</div>
+                </div>
+                <button class="source-copy" title="Copy path" data-path="${escHtml(s.file_path)}">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>
+                </button>`;
+            // Copy handler
+            card.querySelector('.source-copy').addEventListener('click',function(){navigator.clipboard.writeText(this.dataset.path);toast('Path copied','success');});
+            // Expand / collapse source text on click
+            const textEl=card.querySelector('.source-text');
+            const hintEl=card.querySelector('.source-expand-hint');
+            textEl.addEventListener('click',()=>{
+                textEl.classList.toggle('expanded');
+                hintEl.textContent=textEl.classList.contains('expanded')?'Click to collapse':'Click to expand';
             });
-            pollStatus();
+            srcList.appendChild(card);
+        });
+        if(!data.sources||!data.sources.length){
+            srcList.innerHTML='<div class="empty-state"><p>No sources found</p></div>';
         }
+    }catch(e){toast('An error occurred','error');}
+    finally{btn.disabled=false;btn.textContent='Ask Question';}
+}
 
-        async function seedDemo() {
-            const btn = document.querySelector('.btn-secondary');
-            btn.disabled = true;
-            const res = await fetch('/demo/seed', {method: 'POST'});
-            const data = await res.json();
-            alert(data.message);
-            document.getElementById('folders').value = data.folder;
-            pollStatus();
+function escHtml(s){return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');}
+
+// Enter to search
+document.getElementById('search-input').addEventListener('keydown',e=>{
+    if(e.key==='Enter'){e.preventDefault();askQuestion();}
+});
+
+/* ════════════════════════════════════════════════════════════
+   FILE TREE (EXPLORER)
+   ════════════════════════════════════════════════════════════ */
+let _treeData=null;
+async function fetchFileTree(){
+    try{
+        const res=await fetch('/files/tree');
+        _treeData=await res.json();
+        const fl = document.getElementById('explorer-filter');
+        renderTree(_treeData, fl ? fl.value : '');
+    }catch(e){/* ignore */}
+}
+
+function renderTree(data,filter=''){
+    const summary=document.getElementById('explorer-summary');
+    summary.textContent=`${data.total_files} files · ${fmt(data.total_size)} total`;
+
+    const container=document.getElementById('file-tree');
+    container.innerHTML='';
+    const fl=filter.toLowerCase();
+
+    for(const [folder,files] of Object.entries(data.folders||{})){
+        const filtered=fl?files.filter(f=>f.path.toLowerCase().includes(fl)):files;
+        if(fl&&!filtered.length)continue;
+
+        const group=document.createElement('div');
+        group.className='folder-group';
+
+        const folderSize=filtered.reduce((s,f)=>s+f.size,0);
+        const hdr=document.createElement('div');
+        hdr.className='folder-hdr';
+        hdr.innerHTML=`<span>📁 ${escHtml(folder)} <span style="color:var(--text-3);font-weight:400;font-size:.78rem">(${filtered.length})</span></span>
+                       <span style="display:flex;align-items:center;gap:.5rem">
+                         <span style="color:var(--text-3);font-weight:400;font-size:.78rem">${fmt(folderSize)}</span>
+                         <span class="arrow">▶</span>
+                       </span>`;
+
+        const fileList=document.createElement('div');
+        fileList.className='folder-files';
+        hdr.onclick=()=>{fileList.classList.toggle('open');hdr.querySelector('.arrow').classList.toggle('open');};
+
+        filtered.forEach(f=>{
+            const name=f.path.split(/[/\\]/).pop();
+            const row=document.createElement('div');
+            row.className='file-row';
+            row.innerHTML=`<span class="file-name"><span class="dot" style="background:${extColor(name)}"></span>${escHtml(name)}</span>
+                           <span class="file-meta">${fmt(f.size)}</span>`;
+            row.title=f.path;
+            fileList.appendChild(row);
+        });
+
+        group.appendChild(hdr);
+        group.appendChild(fileList);
+        container.appendChild(group);
+    }
+
+    if(!Object.keys(data.folders||{}).length){
+        container.innerHTML=`<div class="empty-state">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/></svg>
+            <p>No files indexed yet</p>
+            <small style="color:var(--text-3)">Head to the Library tab to add folders</small></div>`;
+    }
+}
+
+function filterTree(val){
+    if(_treeData)renderTree(_treeData,val);
+}
+let _filterTimer=null;
+function debouncedFilterTree(val){
+    clearTimeout(_filterTimer);
+    _filterTimer=setTimeout(()=>filterTree(val),200);
+}
+
+/* ════════════════════════════════════════════════════════════
+   INSIGHTS
+   ════════════════════════════════════════════════════════════ */
+window._typeChart=null;
+window._folderChart=null;
+
+async function fetchInsights(){
+    try{
+        const [insRes,statusRes,treeRes]=await Promise.all([
+            fetch('/insights'),fetch('/index/status'),fetch('/files/tree')
+        ]);
+        const ins=await insRes.json();
+        const status=await statusRes.json();
+        const tree=await treeRes.json();
+
+        document.getElementById('i-files').textContent=ins.file_count;
+        document.getElementById('i-size').textContent=(ins.total_size_bytes/(1024*1024)).toFixed(1)+' MB';
+        document.getElementById('i-chunks').textContent=status.chunks_indexed;
+        document.getElementById('i-cold').textContent=(ins.cold_files||[]).length;
+
+        // Type chart
+        renderTypeChart(ins.type_breakdown||{});
+
+        // Folder chart
+        const folderSizes={};
+        for(const [folder,files] of Object.entries(tree.folders||{})){
+            folderSizes[folder]=files.reduce((s,f)=>s+f.size,0);
         }
+        renderFolderChart(folderSizes);
 
-        async function pollStatus() {
-            const res = await fetch('/index/status');
-            const data = await res.json();
-            
-            const progressContainer = document.getElementById('progress-container');
-            const progressBar = document.getElementById('progress-bar');
-            const statusText = document.getElementById('status-text');
-            const indexBtn = document.querySelector('#index-tab button');
-            const seedBtn = document.querySelector('.btn-secondary');
+        // Tables
+        fillTable('top-files-body',ins.top_files||[]);
+        fillTable('cold-files-body',ins.cold_files||[]);
+    }catch(e){toast('Failed to load insights','error');}
+}
 
-            statusText.innerText = `Status: ${data.status} | Files: ${data.files_indexed} | Chunks: ${data.chunks_indexed}`;
-            
-            if(data.status === 'running') {
-                progressContainer.style.display = 'block';
-                progressBar.style.width = data.progress_percent + '%';
-                indexBtn.disabled = true;
-                indexBtn.innerText = "Indexing (" + data.progress_percent + "%)...";
-                seedBtn.disabled = true;
-                setTimeout(pollStatus, 1000);
-            } else {
-                if (data.progress_percent === 100 || data.status === 'idle') {
-                    progressBar.style.width = '100%';
-                    indexBtn.disabled = false;
-                    indexBtn.innerText = "Index Folders";
-                    seedBtn.disabled = false;
-                }
-            }
+function fillTable(id,list){
+    const tbody=document.getElementById(id);
+    tbody.innerHTML='';
+    if(!list.length){tbody.innerHTML='<tr><td colspan="2" style="text-align:center;color:var(--text-3)">No data</td></tr>';return;}
+    list.forEach(f=>{
+        const tr=document.createElement('tr');
+        tr.innerHTML=`<td class="table-path" title="${escHtml(f.path)}">${escHtml(f.path)}</td><td style="text-align:right">${fmt(f.size)}</td>`;
+        tbody.appendChild(tr);
+    });
+}
+
+const CHART_COLORS=['#3d15cb','#8e48ea','#9984d4','#959f93','#6b2ff5','#b8a9e3','#706b82','#c7cbc0','#4a2dd6','#a77ff0'];
+
+function chartTextColor(){
+    return document.documentElement.getAttribute('data-theme')==='dark'?'#94a3b8':'#6b7280';
+}
+function chartGridColor(){
+    return document.documentElement.getAttribute('data-theme')==='dark'?'#1f2937':'#e5e7eb';
+}
+
+function renderTypeChart(typeData){
+    if(typeof Chart==='undefined'){console.warn('Chart.js not loaded');return;}
+    const ctx=document.getElementById('type-chart');
+    if(window._typeChart)window._typeChart.destroy();
+    const labels=Object.keys(typeData);
+    const data=labels.map(k=>typeData[k].count);
+    if(!labels.length)return;
+    window._typeChart=new Chart(ctx,{
+        type:'doughnut',
+        data:{labels,datasets:[{data,backgroundColor:CHART_COLORS.slice(0,labels.length),borderWidth:0,borderRadius:4}]},
+        options:{responsive:true,maintainAspectRatio:false,cutout:'60%',
+            plugins:{legend:{position:'bottom',labels:{padding:12,usePointStyle:true,pointStyleWidth:8,
+                color:chartTextColor(),font:{size:11}}}}}
+    });
+}
+
+function renderFolderChart(folderSizes){
+    if(typeof Chart==='undefined'){console.warn('Chart.js not loaded');return;}
+    const ctx=document.getElementById('folder-chart');
+    if(window._folderChart)window._folderChart.destroy();
+    const entries=Object.entries(folderSizes).sort((a,b)=>b[1]-a[1]).slice(0,8);
+    if(!entries.length)return;
+    const labels=entries.map(([k])=>{const parts=k.split(/[/\\]/);return parts[parts.length-1]||k;});
+    const data=entries.map(([,v])=>v/(1024*1024));
+    window._folderChart=new Chart(ctx,{
+        type:'bar',
+        data:{labels,datasets:[{data,backgroundColor:'#3d15cb',borderRadius:5,barPercentage:.65}]},
+        options:{responsive:true,maintainAspectRatio:false,indexAxis:'y',
+            plugins:{legend:{display:false}},
+            scales:{
+                x:{grid:{color:chartGridColor()},ticks:{color:chartTextColor(),font:{size:10}},
+                   title:{display:true,text:'Size (MB)',color:chartTextColor(),font:{size:10}}},
+                y:{grid:{display:false},ticks:{color:chartTextColor(),font:{size:11}}}
+            }}
+    });
+}
+
+function updateChartTheme(){
+    // Re-render charts with updated colors
+    if(window._typeChart){
+        window._typeChart.options.plugins.legend.labels.color=chartTextColor();
+        window._typeChart.update();
+    }
+    if(window._folderChart){
+        window._folderChart.options.scales.x.grid.color=chartGridColor();
+        window._folderChart.options.scales.x.ticks.color=chartTextColor();
+        window._folderChart.options.scales.x.title.color=chartTextColor();
+        window._folderChart.options.scales.y.ticks.color=chartTextColor();
+        window._folderChart.update();
+    }
+}
+
+/* ════════════════════════════════════════════════════════════
+   SYSTEM INFO
+   ════════════════════════════════════════════════════════════ */
+async function fetchSystemInfo(){
+    try{
+        const res=await fetch('/system/info');
+        const info=await res.json();
+        const card=document.getElementById('sys-card');
+        card.style.display='block';
+
+        const badges=document.getElementById('sys-badges');
+        badges.innerHTML='';
+        const scanBadge=document.createElement('span');
+        scanBadge.className='badge '+(info.is_admin?'green':'amber');
+        scanBadge.textContent=info.is_admin?'⚡ NTFS MFT (admin)':'📂 scandir mode';
+        badges.appendChild(scanBadge);
+        const osBadge=document.createElement('span');
+        osBadge.className='badge blue';
+        osBadge.textContent=info.os;
+        badges.appendChild(osBadge);
+
+        if(info.volumes&&info.volumes.length){
+            const vg=document.getElementById('vol-grid');
+            vg.innerHTML='';
+            info.volumes.forEach(v=>{
+                const pct=((v.used_gb/v.total_gb)*100);
+                const color=pct>90?'var(--danger)':pct>75?'var(--warn)':'var(--success)';
+                const card=document.createElement('div');
+                card.className='vol-card';
+                card.innerHTML=`<div class="vol-letter">${v.letter}</div>
+                    <div class="vol-bar"><div class="vol-fill" style="width:${pct.toFixed(0)}%;background:${color}"></div></div>
+                    <div>${v.free_gb} GB free / ${v.total_gb} GB</div>`;
+                vg.appendChild(card);
+            });
         }
+    }catch(e){/* server not ready */}
+}
 
-        async function askQuestion() {
-            const question = document.getElementById('question').value;
-            if(!question) return;
-            
-            const btn = document.getElementById('ask-btn');
-            btn.disabled = true;
-            btn.innerText = "Processing...";
-            
-            try {
-                const res = await fetch('/query', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({question})
-                });
-                const data = await res.json();
-                
-                document.getElementById('results-container').style.display = 'block';
-                document.getElementById('answer-text').innerText = data.answer;
-                
-                const sourcesList = document.getElementById('sources-list');
-                sourcesList.innerHTML = '';
-                data.sources.forEach(s => {
-                    const div = document.createElement('div');
-                    div.className = 'source-item';
-                    div.innerHTML = `<div class="source-path">${s.file_path}</div>
-                                     <div class="source-snippet">${s.snippet}</div>`;
-                    sourcesList.appendChild(div);
-                });
-            } catch(e) { alert("Error!"); }
-            finally { btn.disabled = false; btn.innerText = "Ask Question"; }
-        }
+/* ════════════════════════════════════════════════════════════
+   COMMAND PALETTE (Ctrl+K)
+   ════════════════════════════════════════════════════════════ */
+function openCmdPalette(){
+    document.getElementById('cmd-overlay').style.display='flex';
+    const inp=document.getElementById('cmd-input');
+    inp.value='';
+    inp.focus();
+}
+function closeCmdPalette(ev){
+    if(ev&&ev.target!==document.getElementById('cmd-overlay'))return;
+    document.getElementById('cmd-overlay').style.display='none';
+}
+function runCmdSearch(){
+    const q=document.getElementById('cmd-input').value.trim();
+    if(!q)return;
+    document.getElementById('cmd-overlay').style.display='none';
+    document.getElementById('search-input').value=q;
+    switchPage('search');
+    askQuestion();
+}
 
-        async function fetchInsights() {
-            const res = await fetch('/insights');
-            const data = await res.json();
-            
-            document.getElementById('stat-files').innerText = data.file_count;
-            document.getElementById('stat-size').innerText = (data.total_size_bytes / (1024*1024)).toFixed(2) + ' MB';
-            
-            const statusRes = await fetch('/index/status');
-            const statusData = await statusRes.json();
-            document.getElementById('stat-chunks').innerText = statusData.chunks_indexed;
+/* ════════════════════════════════════════════════════════════
+   KEYBOARD SHORTCUTS
+   ════════════════════════════════════════════════════════════ */
+document.addEventListener('keydown',e=>{
+    // Ctrl+K → Command palette
+    if((e.ctrlKey||e.metaKey)&&e.key==='k'){
+        e.preventDefault();
+        openCmdPalette();
+    }
+    // Escape → close palette
+    if(e.key==='Escape'){
+        document.getElementById('cmd-overlay').style.display='none';
+    }
+});
 
-            const updateTable = (id, list) => {
-                const tbody = document.querySelector(`#${id} tbody`);
-                tbody.innerHTML = '';
-                list.forEach(f => {
-                    const tr = document.createElement('tr');
-                    tr.innerHTML = `<td>${f.path}</td><td>${(f.size/1024).toFixed(1)}</td>`;
-                    tbody.appendChild(tr);
-                });
-            };
-            
-            updateTable('top-files-table', data.top_files);
-            updateTable('cold-files-table', data.cold_files);
-        }
-
-        pollStatus();
-    </script>
+/* ════════════════════════════════════════════════════════════
+   BOOT
+   ════════════════════════════════════════════════════════════ */
+renderHistory();
+fetchSystemInfo();
+fetchStatus();
+</script>
 </body>
 </html>

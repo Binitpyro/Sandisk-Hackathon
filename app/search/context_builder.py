@@ -1,11 +1,18 @@
 from typing import List, Dict, Any
+from app.config import settings
 
-def build_context(retrieved_results: List[Dict[str, Any]], max_tokens: int = 2000) -> str:
+
+def build_context(retrieved_results: List[Dict[str, Any]], max_tokens: int = 0) -> str:
     """Formats retrieved snippets into a single context string for the LLM."""
     if not retrieved_results:
         return "No relevant context found."
 
+    if max_tokens <= 0:
+        max_tokens = settings.context_max_tokens
+
     context_parts = []
+    total_len = 0
+    max_chars = max_tokens * 4  # ~4 chars per token heuristic
     
     for i, res in enumerate(retrieved_results):
         snippet_id = i + 1
@@ -17,12 +24,10 @@ def build_context(retrieved_results: List[Dict[str, Any]], max_tokens: int = 200
 {text}
 ---
 """
-        context_parts.append(part)
-        
-        # Roughly check token count (4 chars per token heuristic)
-        total_len = sum(len(p) for p in context_parts)
-        if total_len > (max_tokens * 4):
-            context_parts.pop()
+        if total_len + len(part) > max_chars:
             break
+            
+        context_parts.append(part)
+        total_len += len(part)
             
     return "\n".join(context_parts)
