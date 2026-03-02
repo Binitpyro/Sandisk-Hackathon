@@ -388,8 +388,8 @@
        COMMAND PALETTE
        ══════════════════════════════════════════════════════════ */
     .cmd-overlay{position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:100;
-                 align-items:flex-start;justify-content:center;padding-top:18vh;
-                 backdrop-filter:blur(4px);animation:fadeIn .15s ease;border:none;padding:0;max-width:100vw;max-height:100vh;width:100vw;height:100vh}
+                 align-items:flex-start;justify-content:center;padding:18vh 0 0;
+                 backdrop-filter:blur(4px);animation:fadeIn .15s ease;border:none;max-width:100vw;max-height:100vh;width:100vw;height:100vh}
     .cmd-overlay[open]{display:flex}
     .cmd-box{width:520px;background:var(--bg-card);border:1px solid var(--border);
              border-radius:var(--r-lg);box-shadow:var(--sh-lg);overflow:hidden}
@@ -620,7 +620,7 @@
 <div class="page" id="page-search">
     <div class="page-header">
         <h1>🔍 Search</h1>
-        <p>Ask questions about your indexed files — powered by RAG</p>
+        <p>Ask questions about your indexed files </p>
     </div>
 
     <div class="card">
@@ -1450,7 +1450,7 @@ function treemapBorder(){ return isDark()?'#0e0b1a':'#ffffff'; }
 /* ── contrast helper: pick white or black text based on bg luminance ── */
 function contrastText(hex){
     const c=hex.replace('#','');
-    const r=parseInt(c.substr(0,2),16), g=parseInt(c.substr(2,2),16), b=parseInt(c.substr(4,2),16);
+    const r=Number.parseInt(c.substr(0,2),16), g=Number.parseInt(c.substr(2,2),16), b=Number.parseInt(c.substr(4,2),16);
     return (r*299+g*587+b*114)/1000>150?'#000000':'#ffffff';
 }
 
@@ -1828,7 +1828,9 @@ setInterval(async()=>{
         document.getElementById('s-chunks').textContent=d.chunks_indexed||0;
         document.getElementById('sb-files').textContent='Files: '+(d.files_indexed||0);
         document.getElementById('sb-chunks').textContent='Chunks: '+(d.chunks_indexed||0);
-    }catch(e){/* silent */}
+    }catch(error){
+        console.debug('Status poll failed', error);
+    }
 },5000);
 </script>
 </body>

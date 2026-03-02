@@ -194,6 +194,7 @@ venv/
 pma_metadata.db
 pma_metadata.db-journal
 pma_metadata.db-wal
+pma_metadata.db-shm
 chroma_db/
 demo_data/
 .env
@@ -208,7 +209,7 @@ vector_store/chroma_db/
 .ipynb_checkpoints/
 
 # Hackathon local/private files
-docs/
+SanHack Obsidian/
 personal help/
 GEMINI.md
 

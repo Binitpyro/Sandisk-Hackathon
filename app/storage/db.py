@@ -76,6 +76,64 @@ class DatabaseManager:
                     logger.error("Migration failed for column '%s': %s", col_name, exc)
                     raise
 
+        # Table-level migration: folder_profiles
+        try:
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS folder_profiles (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    folder_path TEXT UNIQUE NOT NULL,
+                    folder_tag TEXT NOT NULL,
+                    profile_text TEXT NOT NULL DEFAULT '',
+                    project_type TEXT NOT NULL DEFAULT 'unknown',
+                    file_count INTEGER NOT NULL DEFAULT 0,
+                    total_size_bytes INTEGER NOT NULL DEFAULT 0,
+                    top_extensions TEXT NOT NULL DEFAULT '',
+                    key_files TEXT NOT NULL DEFAULT '',
+                    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+                )
+            """)
+            await conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_folder_profiles_tag "
+                "ON folder_profiles(folder_tag)"
+            )
+            await conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_folder_profiles_type "
+                "ON folder_profiles(project_type)"
+            )
+            await conn.commit()
+            logger.debug("folder_profiles table ensured.")
+        except Exception as exc:
+            logger.debug("folder_profiles migration note: %s", exc)
+
+        try:
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS unreal_project_facts (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    folder_path TEXT UNIQUE NOT NULL,
+                    folder_tag TEXT NOT NULL,
+                    project_name TEXT NOT NULL DEFAULT '',
+                    engine_version TEXT NOT NULL DEFAULT 'unknown',
+                    total_assets INTEGER NOT NULL DEFAULT 0,
+                    map_count INTEGER NOT NULL DEFAULT 0,
+                    character_blueprints INTEGER NOT NULL DEFAULT 0,
+                    pawn_blueprints INTEGER NOT NULL DEFAULT 0,
+                    skeletal_meshes INTEGER NOT NULL DEFAULT 0,
+                    material_count INTEGER NOT NULL DEFAULT 0,
+                    niagara_systems INTEGER NOT NULL DEFAULT 0,
+                    environment_assets INTEGER NOT NULL DEFAULT 0,
+                    metadata_source TEXT NOT NULL DEFAULT '',
+                    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+                )
+            """)
+            await conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_unreal_facts_folder_tag "
+                "ON unreal_project_facts(folder_tag)"
+            )
+            await conn.commit()
+            logger.debug("unreal_project_facts table ensured.")
+        except Exception as exc:
+            logger.debug("unreal_project_facts migration note: %s", exc)
+
     async def insert_file(self, file_data: Dict[str, Any]) -> int:
         """Inserts file metadata and returns the new file id."""
         conn = self._get_conn()
@@ -201,6 +259,47 @@ class DatabaseManager:
         ) as cursor:
             return list(await cursor.fetchall())
 
+    async def get_file_stats_summary(self) -> Dict[str, Any]:
+        """Return aggregate file statistics grouped by type and folder_tag.
+
+        Used to augment LLM context for inventory / listing questions
+        so the model can answer with counts and locations rather than
+        dumping raw filenames.
+        """
+        conn = self._get_conn()
+
+        # Per-extension counts & total size
+        type_rows = await (
+            await conn.execute(
+                "SELECT type, COUNT(*) AS cnt, SUM(size) AS total_bytes "
+                "FROM files GROUP BY type ORDER BY cnt DESC"
+            )
+        ).fetchall()
+
+        # Per-folder-tag counts
+        folder_rows = await (
+            await conn.execute(
+                "SELECT folder_tag, COUNT(*) AS cnt "
+                "FROM files GROUP BY folder_tag ORDER BY cnt DESC"
+            )
+        ).fetchall()
+
+        total_files = sum(r[1] for r in type_rows)
+        total_bytes = sum(r[2] or 0 for r in type_rows)
+
+        return {
+            "total_files": total_files,
+            "total_size_mb": round(total_bytes / (1024 * 1024), 2),
+            "by_type": [
+                {"ext": r[0], "count": r[1], "size_mb": round((r[2] or 0) / (1024 * 1024), 2)}
+                for r in type_rows
+            ],
+            "by_folder": [
+                {"folder": r[0] or "Unknown", "count": r[1]}
+                for r in folder_rows
+            ],
+        }
+
     async def get_counts(self) -> Tuple[int, int]:
         """Return (file_count, chunk_count) in a single public call."""
         conn = self._get_conn()
@@ -308,6 +407,8 @@ class DatabaseManager:
             DELETE FROM chunks;
             DELETE FROM files;
             DELETE FROM query_history;
+            DELETE FROM folder_profiles;
+            DELETE FROM unreal_project_facts;
 
             -- Recreate FTS table and triggers
             CREATE VIRTUAL TABLE IF NOT EXISTS chunk_fts USING fts5(
@@ -377,3 +478,152 @@ class DatabaseManager:
         ) as cursor:
             rows = await cursor.fetchall()
             return [{"id": r[0], "path": r[1], "summary": r[2]} for r in rows]
+
+    # ── Folder profiles ───────────────────────────────────────────────
+
+    async def upsert_folder_profile(self, profile: Dict[str, Any]) -> None:
+        """Insert or update a folder profile."""
+        conn = self._get_conn()
+        await conn.execute(
+            """
+            INSERT INTO folder_profiles
+                (folder_path, folder_tag, profile_text, project_type,
+                 file_count, total_size_bytes, top_extensions, key_files, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+            ON CONFLICT(folder_path) DO UPDATE SET
+                folder_tag = excluded.folder_tag,
+                profile_text = excluded.profile_text,
+                project_type = excluded.project_type,
+                file_count = excluded.file_count,
+                total_size_bytes = excluded.total_size_bytes,
+                top_extensions = excluded.top_extensions,
+                key_files = excluded.key_files,
+                updated_at = datetime('now')
+            """,
+            (
+                profile["folder_path"],
+                profile["folder_tag"],
+                profile["profile_text"],
+                profile["project_type"],
+                profile["file_count"],
+                profile["total_size_bytes"],
+                profile["top_extensions"],
+                profile["key_files"],
+            ),
+        )
+        await conn.commit()
+
+    async def get_all_folder_profiles(self) -> List[Dict[str, Any]]:
+        """Return every stored folder profile."""
+        conn = self._get_conn()
+        async with conn.execute(
+            "SELECT folder_path, folder_tag, profile_text, project_type, "
+            "file_count, total_size_bytes, top_extensions, key_files "
+            "FROM folder_profiles ORDER BY folder_path"
+        ) as cursor:
+            rows = await cursor.fetchall()
+            return [
+                {
+                    "folder_path": r[0],
+                    "folder_tag": r[1],
+                    "profile_text": r[2],
+                    "project_type": r[3],
+                    "file_count": r[4],
+                    "total_size_bytes": r[5],
+                    "top_extensions": r[6],
+                    "key_files": r[7],
+                }
+                for r in rows
+            ]
+
+    async def get_folder_profiles_text(self) -> str:
+        """Return a human-readable summary of all folder profiles for LLM context."""
+        profiles = await self.get_all_folder_profiles()
+        if not profiles:
+            return ""
+        lines = ["=== Indexed Project/Folder Profiles ==="]
+        for p in profiles:
+            size_mb = round(p["total_size_bytes"] / (1024 * 1024), 2)
+            lines.append(f"\n## {p['folder_tag']} — {p['project_type']} project")
+            lines.append(f"   Path: {p['folder_path']}")
+            lines.append(f"   Files: {p['file_count']} ({size_mb} MB)")
+            lines.append(f"   Top extensions: {p['top_extensions']}")
+            if p["key_files"]:
+                lines.append(f"   Key files: {p['key_files']}")
+            if p["profile_text"]:
+                lines.append(f"   Description: {p['profile_text']}")
+        lines.append("=" * 50)
+        return "\n".join(lines)
+
+    async def upsert_unreal_project_facts(self, facts: Dict[str, Any]) -> None:
+        """Insert or update structured Unreal project facts."""
+        conn = self._get_conn()
+        await conn.execute(
+            """
+            INSERT INTO unreal_project_facts
+                (folder_path, folder_tag, project_name, engine_version,
+                 total_assets, map_count, character_blueprints, pawn_blueprints,
+                 skeletal_meshes, material_count, niagara_systems,
+                 environment_assets, metadata_source, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+            ON CONFLICT(folder_path) DO UPDATE SET
+                folder_tag = excluded.folder_tag,
+                project_name = excluded.project_name,
+                engine_version = excluded.engine_version,
+                total_assets = excluded.total_assets,
+                map_count = excluded.map_count,
+                character_blueprints = excluded.character_blueprints,
+                pawn_blueprints = excluded.pawn_blueprints,
+                skeletal_meshes = excluded.skeletal_meshes,
+                material_count = excluded.material_count,
+                niagara_systems = excluded.niagara_systems,
+                environment_assets = excluded.environment_assets,
+                metadata_source = excluded.metadata_source,
+                updated_at = datetime('now')
+            """,
+            (
+                facts["folder_path"],
+                facts["folder_tag"],
+                facts["project_name"],
+                facts["engine_version"],
+                facts["total_assets"],
+                facts["map_count"],
+                facts["character_blueprints"],
+                facts["pawn_blueprints"],
+                facts["skeletal_meshes"],
+                facts["material_count"],
+                facts["niagara_systems"],
+                facts["environment_assets"],
+                facts["metadata_source"],
+            ),
+        )
+        await conn.commit()
+
+    async def get_all_unreal_project_facts(self) -> List[Dict[str, Any]]:
+        """Return all imported Unreal project facts."""
+        conn = self._get_conn()
+        async with conn.execute(
+            "SELECT folder_path, folder_tag, project_name, engine_version, "
+            "total_assets, map_count, character_blueprints, pawn_blueprints, "
+            "skeletal_meshes, material_count, niagara_systems, environment_assets, metadata_source "
+            "FROM unreal_project_facts ORDER BY folder_tag"
+        ) as cursor:
+            rows = await cursor.fetchall()
+            return [
+                {
+                    "folder_path": r[0],
+                    "folder_tag": r[1],
+                    "project_name": r[2],
+                    "engine_version": r[3],
+                    "total_assets": r[4],
+                    "map_count": r[5],
+                    "character_blueprints": r[6],
+                    "pawn_blueprints": r[7],
+                    "skeletal_meshes": r[8],
+                    "material_count": r[9],
+                    "niagara_systems": r[10],
+                    "environment_assets": r[11],
+                    "metadata_source": r[12],
+                }
+                for r in rows
+            ]
