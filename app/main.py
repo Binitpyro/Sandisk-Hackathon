@@ -29,6 +29,7 @@ from pydantic import BaseModel, Field
 from sse_starlette.sse import EventSourceResponse
 
 from app.config import settings
+from app.insights.unreal_import import parse_unreal_metadata
 from app.storage.db import DatabaseManager
 
 _indexing_service_cls: Any = None
@@ -200,6 +201,15 @@ class QueryRequest(BaseModel):
     def validated_question(self) -> str:
         return self.question.strip()
 
+
+class UnrealImportRequest(BaseModel):
+    json_path: str = Field(..., min_length=3, description="Path to Unreal metadata JSON export")
+    folder_tag: Optional[str] = Field(None, description="Optional folder/project tag override")
+
+    @property
+    def validated_json_path(self) -> str:
+        return os.path.realpath(os.path.normpath(self.json_path.strip().strip('"').strip("'")))
+
 @app.get("/health")
 async def health(db: DatabaseManager = Depends(get_db)):
     db_ok = await db.is_healthy()
@@ -303,6 +313,79 @@ async def query(
         logger.warning("Failed to save query history: %s", e)
 
     return results
+
+
+@app.post("/unreal/import")
+async def import_unreal_metadata(
+    request: UnrealImportRequest,
+    db: DatabaseManager = Depends(get_db),
+    emb=Depends(get_emb),
+    chroma=Depends(get_chroma),
+):
+    """Import Unreal metadata JSON and enrich project-level understanding.
+
+    Expected input is a JSON export produced from Unreal tooling or scripts
+    containing project + asset metadata.
+    """
+    json_path = request.validated_json_path
+    if not os.path.isfile(json_path):
+        return JSONResponse(status_code=400, content={"error": "Metadata JSON file does not exist."})
+
+    try:
+        facts = parse_unreal_metadata(json_path, folder_tag=request.folder_tag or "")
+
+        await db.upsert_unreal_project_facts(facts)
+
+        profile = {
+            "folder_path": facts["folder_path"],
+            "folder_tag": facts["folder_tag"],
+            "profile_text": facts["profile_text"],
+            "project_type": "Unreal Engine",
+            "file_count": max(1, int(facts.get("total_assets", 0))),
+            "total_size_bytes": 0,
+            "top_extensions": ".uasset, .umap",
+            "key_files": ".uproject",
+        }
+        await db.upsert_folder_profile(profile)
+
+        try:
+            emb_vec = await emb.embed_texts([facts["profile_text"]])
+            await chroma.add_summary(
+                doc_id=f"folder_profile_{facts['folder_tag']}",
+                embedding=emb_vec[0],
+                metadata={
+                    "file_path": facts["folder_path"],
+                    "folder_tag": facts["folder_tag"],
+                    "project_type": "Unreal Engine",
+                    "is_folder_profile": "true",
+                    "is_unreal_import": "true",
+                },
+            )
+        except Exception as emb_err:
+            logger.warning("Unreal profile embedding failed (non-fatal): %s", emb_err)
+
+        return {
+            "message": "Unreal metadata imported successfully.",
+            "project": {
+                "name": facts["project_name"],
+                "engine_version": facts["engine_version"],
+                "folder_tag": facts["folder_tag"],
+                "folder_path": facts["folder_path"],
+            },
+            "stats": {
+                "total_assets": facts["total_assets"],
+                "map_count": facts["map_count"],
+                "environment_assets": facts["environment_assets"],
+                "character_blueprints": facts["character_blueprints"],
+                "pawn_blueprints": facts["pawn_blueprints"],
+                "skeletal_meshes": facts["skeletal_meshes"],
+                "material_count": facts["material_count"],
+                "niagara_systems": facts["niagara_systems"],
+            },
+        }
+    except Exception as e:
+        logger.error("Unreal metadata import failed: %s", e, exc_info=True)
+        return JSONResponse(status_code=500, content={"error": "Failed to import Unreal metadata."})
 
 @app.get("/insights")
 async def get_insights(db: DatabaseManager = Depends(get_db)):

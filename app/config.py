@@ -19,7 +19,7 @@ class Settings(BaseSettings):
     chunk_size: int = 512
     chunk_overlap: int = 50
     max_file_size_mb: int = 50
-    supported_extensions: str = ".txt,.md,.pdf,.docx,.csv,.json,.py,.js,.ts,.java,.c,.cpp,.rs,.go,.rb,.html,.css,.xml,.yaml,.yml,.toml,.ini,.cfg,.sh,.bat"
+    supported_extensions: str = ".txt,.md,.pdf,.docx,.csv,.json,.py,.js,.ts,.java,.c,.cpp,.rs,.go,.rb,.html,.css,.xml,.yaml,.yml,.toml,.ini,.cfg,.sh,.bat,.uasset,.umap,.uproject,.uplugin"
     index_concurrency: int = 8
 
     gemini_api_key: str = ""
@@ -34,8 +34,8 @@ class Settings(BaseSettings):
     rrf_k: int = 60
     rrf_score_scale: int = 1000
     summary_boost_factor: float = 1.25
-    retrieval_top_k: int = 10
-    context_max_tokens: int = 4000
+    retrieval_top_k: int = 6
+    context_max_tokens: int = 2200
 
     dev_mode: bool = True  # Default on for hackathon; set to False for prod
     log_level: str = "INFO"

@@ -3,6 +3,7 @@ import logging
 import asyncio
 import threading
 import concurrent.futures
+from collections import Counter
 from pathlib import Path
 from datetime import datetime
 from typing import List, Dict, Any, Optional, Set, Tuple
@@ -13,6 +14,216 @@ from app.scanner.scanner import scan_folder as fast_scan
 from app.config import settings
 
 logger = logging.getLogger(__name__)
+
+UNREAL_PROJECT_EXT = ".uproject"
+UNITY_SCENE_EXT = ".unity"
+NODE_PACKAGE_FILE = "package.json"
+PYTHON_PROJECT_LABEL = "Python project"
+
+# ── Project-type detection rules ────────────────────────────────────
+# Each rule: (project_type, description_template,
+#             required_indicators: set of (kind, pattern) tuples)
+#   kind = "ext" (file extension present) | "file" (filename present)
+#          | "dir" (directory present)
+_PROJECT_SIGNATURES: List[Tuple[str, str, List[Tuple[str, str]]]] = [
+    ("Unreal Engine", "Unreal Engine game/application project",
+     [("ext", UNREAL_PROJECT_EXT)]),
+    ("Unreal Engine (assets only)", "Unreal Engine asset folder (Content)",
+     [("ext", ".uasset")]),
+    ("Unity", "Unity game/application project",
+     [("dir", "Assets"), ("ext", UNITY_SCENE_EXT)]),
+    ("Unity", "Unity game/application project",
+     [("ext", UNITY_SCENE_EXT)]),
+    ("Godot", "Godot engine project",
+     [("file", "project.godot")]),
+    ("React", "React web application",
+     [("file", NODE_PACKAGE_FILE), ("dir", "src")]),
+    ("Node.js", "Node.js / JavaScript project",
+     [("file", NODE_PACKAGE_FILE)]),
+    ("Python", PYTHON_PROJECT_LABEL,
+     [("file", "pyproject.toml")]),
+    ("Python", PYTHON_PROJECT_LABEL,
+     [("file", "setup.py")]),
+    ("Python", PYTHON_PROJECT_LABEL,
+     [("file", "requirements.txt")]),
+    ("Rust", "Rust project",
+     [("file", "Cargo.toml")]),
+    ("Go", "Go project",
+     [("file", "go.mod")]),
+    ("Java/Maven", "Java Maven project",
+     [("file", "pom.xml")]),
+    ("Java/Gradle", "Java Gradle project",
+     [("file", "build.gradle")]),
+    (".NET/C#", ".NET / C# project",
+     [("ext", ".csproj")]),
+    ("C/C++", "C/C++ project",
+     [("file", "CMakeLists.txt")]),
+    ("C/C++", "C/C++ project",
+     [("file", "Makefile")]),
+    ("LaTeX", "LaTeX document project",
+     [("ext", ".tex")]),
+]
+
+
+def _indicator_matches(
+    kind: str,
+    pattern: str,
+    extensions: Set[str],
+    filenames: Set[str],
+    directories: Set[str],
+) -> bool:
+    if kind == "ext":
+        return pattern.lower() in extensions
+    if kind == "file":
+        return pattern.lower() in filenames
+    if kind == "dir":
+        return pattern in directories
+    return False
+
+
+def _detect_project_type(
+    files: List[Tuple[Path, str]],
+    folder: Path,
+) -> Tuple[str, str]:
+    """Infer the project type from file extensions, filenames, and directories.
+
+    Returns (project_type, description).
+    """
+    extensions, filenames, directories = _collect_project_markers(files, folder)
+
+    for proj_type, desc, indicators in _PROJECT_SIGNATURES:
+        if all(
+            _indicator_matches(kind, pattern, extensions, filenames, directories)
+            for kind, pattern in indicators
+        ):
+            return proj_type, desc
+
+    dominant_type = _dominant_extension_project_type(files)
+    if dominant_type:
+        return dominant_type
+
+    return "unknown", "General file collection"
+
+
+def _collect_project_markers(
+    files: List[Tuple[Path, str]],
+    folder: Path,
+) -> Tuple[Set[str], Set[str], Set[str]]:
+    extensions: Set[str] = set()
+    filenames: Set[str] = set()
+    directories: Set[str] = set()
+
+    for file_path, _ in files:
+        extensions.add(file_path.suffix.lower())
+        filenames.add(file_path.name.lower())
+        _add_relative_directory(file_path, folder, directories)
+
+    _add_direct_child_directories(folder, directories)
+    return extensions, filenames, directories
+
+
+def _add_relative_directory(file_path: Path, folder: Path, directories: Set[str]) -> None:
+    try:
+        rel = file_path.relative_to(folder)
+    except ValueError:
+        return
+
+    if len(rel.parts) > 1:
+        directories.add(rel.parts[0])
+
+
+def _add_direct_child_directories(folder: Path, directories: Set[str]) -> None:
+    try:
+        for entry in folder.iterdir():
+            if entry.is_dir():
+                directories.add(entry.name)
+    except OSError:
+        return
+
+
+def _dominant_extension_project_type(
+    files: List[Tuple[Path, str]],
+) -> Optional[Tuple[str, str]]:
+    ext_counts = Counter(file_path.suffix.lower() for file_path, _ in files if file_path.suffix)
+    dominant = ext_counts.most_common(1)
+    if not dominant:
+        return None
+    extension = dominant[0][0]
+    return f"{extension} files", f"Collection of {extension} files"
+
+
+def _build_folder_profile(
+    folder: Path,
+    folder_tag: str,
+    files: List[Tuple[Path, str]],
+) -> Dict[str, Any]:
+    """Analyse an indexed folder and produce a rich profile dict."""
+    # Filter files belonging to this folder
+    folder_files = [(fp, ft) for fp, ft in files if str(fp).startswith(str(folder))]
+
+    ext_counts: Counter = Counter()
+    total_size = 0
+    key_files_list: List[str] = []
+
+    # Key config/project files to highlight
+    _KEY_NAMES = {
+        "readme.md", "readme.txt", "readme",
+        "package.json", "pyproject.toml", "setup.py", "requirements.txt",
+        "cargo.toml", "go.mod", "pom.xml", "build.gradle",
+        "cmakelists.txt", "makefile", ".gitignore",
+        "dockerfile", "docker-compose.yml",
+    }
+    # Key extensions for project files
+    _KEY_EXTS = {UNREAL_PROJECT_EXT, ".sln", ".csproj", UNITY_SCENE_EXT}
+
+    for fp, _ in folder_files:
+        ext = fp.suffix.lower()
+        ext_counts[ext] += 1
+        try:
+            total_size += fp.stat().st_size
+        except OSError:
+            pass
+        if fp.name.lower() in _KEY_NAMES or ext in _KEY_EXTS:
+            key_files_list.append(fp.name)
+
+    project_type, description = _detect_project_type(folder_files, folder)
+
+    top_exts = ", ".join(
+        f"{ext} ({cnt})" for ext, cnt in ext_counts.most_common(8)
+    )
+
+    # Build human-readable profile text (will be embedded for search)
+    profile_lines = [
+        f"Project: {folder_tag}",
+        f"Type: {project_type} — {description}",
+        f"Location: {folder}",
+        f"Contains {len(folder_files)} files totalling "
+        f"{round(total_size / (1024 * 1024), 2)} MB.",
+        f"Main file types: {top_exts}.",
+    ]
+    if key_files_list:
+        profile_lines.append(f"Key files: {', '.join(key_files_list[:15])}.")
+
+    # Add top-level directory structure
+    try:
+        subdirs = sorted(
+            d.name for d in folder.iterdir() if d.is_dir() and not d.name.startswith(".")
+        )[:15]
+        if subdirs:
+            profile_lines.append(f"Top-level folders: {', '.join(subdirs)}.")
+    except OSError:
+        pass
+
+    return {
+        "folder_path": str(folder),
+        "folder_tag": folder_tag,
+        "profile_text": " ".join(profile_lines),
+        "project_type": project_type,
+        "file_count": len(folder_files),
+        "total_size_bytes": total_size,
+        "top_extensions": top_exts,
+        "key_files": ", ".join(key_files_list[:15]),
+    }
 
 def _resolve_folder_overlaps(folders: List[str]) -> List[Path]:
     """Remove child folders whose content is already covered by a parent.
@@ -169,10 +380,15 @@ class IndexingService:
 
             if not files_to_index:
                 logger.info("All files are up-to-date — nothing to index.")
+                # Still (re)generate folder profiles even when nothing new to index
+                await self._generate_folder_profiles(all_files, unique_folders)
                 progress.complete()
                 return
 
             await self._batch_index_pipeline(files_to_index)
+
+            # Generate folder profiles after indexing so the DB has all files
+            await self._generate_folder_profiles(all_files, unique_folders)
 
             progress.complete()
             logger.info(
@@ -214,30 +430,13 @@ class IndexingService:
             ]
             results = await asyncio.gather(*futs, return_exceptions=True)
 
-        for (fp, _ft), result in zip(files_to_index, results):
-            if isinstance(result, Exception):
-                logger.error("Error extracting %s: %s", fp, result)
-                progress.update(0, fp.name)
-                continue
-            if result is None:
-                progress.update(0, fp.name)
-                continue
-            prepared.append(result)
+        prepared = self._collect_prepared_items(files_to_index, results)
 
         if not prepared:
             return
 
         # ── Phase 2: batch embed ALL texts at once ─────────────────────
-        all_texts: List[str] = []
-        text_map: List[Tuple[int, str, int]] = []  # (file_idx, kind, sub_idx)
-
-        for fi, item in enumerate(prepared):
-            for ci, chunk in enumerate(item["chunks"]):
-                all_texts.append(chunk["text_preview"])
-                text_map.append((fi, "chunk", ci))
-            if item.get("summary"):
-                all_texts.append(item["summary"])
-                text_map.append((fi, "summary", 0))
+        all_texts, text_map = self._build_embedding_payload(prepared)
 
         logger.info(
             "Pipeline phase 2/3: embedding %d texts in batch …", len(all_texts)
@@ -246,90 +445,244 @@ class IndexingService:
             all_texts, batch_size=settings.embedding_batch_size
         )
 
-        # Distribute embeddings back to their owning file
-        for idx, (fi, kind, si) in enumerate(text_map):
-            if kind == "chunk":
-                prepared[fi]["chunks"][si]["_embedding"] = all_embeddings[idx]
-            else:
-                prepared[fi]["_summary_embedding"] = all_embeddings[idx]
+        self._assign_embeddings(prepared, text_map, all_embeddings)
 
         # ── Phase 3: batch store in DB + ChromaDB ──────────────────────
         logger.info("Pipeline phase 3/3: storing %d files …", len(prepared))
+        await self._store_prepared_items(prepared)
 
+    def _collect_prepared_items(
+        self,
+        files_to_index: List[Tuple[Path, str]],
+        results: List[Any],
+    ) -> List[Dict[str, Any]]:
+        prepared: List[Dict[str, Any]] = []
+        for (file_path, _), result in zip(files_to_index, results):
+            if isinstance(result, Exception):
+                logger.error("Error extracting %s: %s", file_path, result)
+                progress.update(0, file_path.name)
+                continue
+            if result is None:
+                progress.update(0, file_path.name)
+                continue
+            prepared.append(result)
+        return prepared
+
+    @staticmethod
+    def _build_embedding_payload(
+        prepared: List[Dict[str, Any]],
+    ) -> Tuple[List[str], List[Tuple[int, str, int]]]:
+        all_texts: List[str] = []
+        text_map: List[Tuple[int, str, int]] = []
+
+        for file_idx, item in enumerate(prepared):
+            for chunk_idx, chunk in enumerate(item["chunks"]):
+                all_texts.append(chunk["text_preview"])
+                text_map.append((file_idx, "chunk", chunk_idx))
+            if item.get("summary"):
+                all_texts.append(item["summary"])
+                text_map.append((file_idx, "summary", 0))
+
+        return all_texts, text_map
+
+    @staticmethod
+    def _assign_embeddings(
+        prepared: List[Dict[str, Any]],
+        text_map: List[Tuple[int, str, int]],
+        all_embeddings: List[List[float]],
+    ) -> None:
+        for idx, (file_idx, kind, sub_idx) in enumerate(text_map):
+            if kind == "chunk":
+                prepared[file_idx]["chunks"][sub_idx]["_embedding"] = all_embeddings[idx]
+                continue
+            prepared[file_idx]["_summary_embedding"] = all_embeddings[idx]
+
+    async def _store_prepared_items(self, prepared: List[Dict[str, Any]]) -> None:
         all_chroma_ids: List[str] = []
         all_chroma_embs: List[List[float]] = []
         all_chroma_metas: List[Dict[str, Any]] = []
         summary_items: List[Dict[str, Any]] = []
 
         for item in prepared:
-            try:
-                fdata = item["file_data"]
-                fpath_str = fdata["path"]
-                ftag = item["folder_tag"]
-
-                # If file already exists, remove its old chunks
-                existing = await self.db.get_file_by_path(fpath_str)
-                if existing:
-                    fid_old = existing["id"]
-                    old_chunks = await self.db.get_file_chunks(fid_old)
-                    old_ids = [str(c["id"]) for c in old_chunks]
-                    if old_ids:
-                        await self.chroma_client.delete_documents(old_ids)
-                    await self.db.delete_file_chunks(fid_old)
-
-                file_id = await self.db.insert_file(fdata)
-
-                # Prepare chunk rows (strip the transient _embedding key)
-                chunk_rows = [
-                    {k: v for k, v in c.items() if k != "_embedding"}
-                    for c in item["chunks"]
-                ]
-                for cr in chunk_rows:
-                    cr["file_id"] = file_id
-
-                chunk_ids_int = await self.db.insert_chunks_bulk(chunk_rows)
-
-                for cid_int, chunk in zip(chunk_ids_int, item["chunks"]):
-                    all_chroma_ids.append(str(cid_int))
-                    all_chroma_embs.append(chunk["_embedding"])
-                    all_chroma_metas.append({
-                        "chunk_id": str(cid_int),
-                        "file_path": fpath_str,
-                        "folder_tag": ftag,
-                    })
-
-                if item.get("_summary_embedding"):
-                    summary_items.append({
-                        "doc_id": f"file_{file_id}",
-                        "embedding": item["_summary_embedding"],
-                        "metadata": {
-                            "file_id": file_id,
-                            "file_path": fpath_str,
-                            "folder_tag": ftag,
-                        },
-                    })
-
-                progress.update(len(item["chunks"]), item["path"].name)
-
-            except Exception as e:
-                logger.error("Error storing file %s: %s", item["path"], e)
-                progress.update(0, item["path"].name)
+            await self._store_single_prepared_item(
+                item,
+                all_chroma_ids,
+                all_chroma_embs,
+                all_chroma_metas,
+                summary_items,
+            )
 
         await self.db.commit()
+        await self._flush_chroma_batches(
+            all_chroma_ids,
+            all_chroma_embs,
+            all_chroma_metas,
+            summary_items,
+        )
 
-        # Batch upsert into ChromaDB (ChromaDB caps at ~5 461 per call)
-        CHROMA_BATCH = 5000
-        for i in range(0, len(all_chroma_ids), CHROMA_BATCH):
-            end = min(i + CHROMA_BATCH, len(all_chroma_ids))
+    async def _store_single_prepared_item(
+        self,
+        item: Dict[str, Any],
+        all_chroma_ids: List[str],
+        all_chroma_embs: List[List[float]],
+        all_chroma_metas: List[Dict[str, Any]],
+        summary_items: List[Dict[str, Any]],
+    ) -> None:
+        try:
+            file_data = item["file_data"]
+            file_path = file_data["path"]
+            folder_tag = item["folder_tag"]
+
+            existing = await self.db.get_file_by_path(file_path)
+            if existing:
+                await self._delete_existing_chunks(existing["id"])
+
+            file_id = await self.db.insert_file(file_data)
+            chunk_ids_int = await self.db.insert_chunks_bulk(
+                self._build_chunk_rows(item["chunks"], file_id)
+            )
+
+            self._append_chunk_vectors(
+                item,
+                chunk_ids_int,
+                file_path,
+                folder_tag,
+                all_chroma_ids,
+                all_chroma_embs,
+                all_chroma_metas,
+            )
+
+            self._append_summary_item(item, file_id, file_path, folder_tag, summary_items)
+            progress.update(len(item["chunks"]), item["path"].name)
+        except Exception as e:
+            logger.error("Error storing file %s: %s", item["path"], e)
+            progress.update(0, item["path"].name)
+
+    async def _delete_existing_chunks(self, file_id: int) -> None:
+        old_chunks = await self.db.get_file_chunks(file_id)
+        old_ids = [str(chunk["id"]) for chunk in old_chunks]
+        if old_ids:
+            await self.chroma_client.delete_documents(old_ids)
+        await self.db.delete_file_chunks(file_id)
+
+    @staticmethod
+    def _build_chunk_rows(chunks: List[Dict[str, Any]], file_id: int) -> List[Dict[str, Any]]:
+        chunk_rows = [{k: v for k, v in chunk.items() if k != "_embedding"} for chunk in chunks]
+        for chunk_row in chunk_rows:
+            chunk_row["file_id"] = file_id
+        return chunk_rows
+
+    @staticmethod
+    def _append_chunk_vectors(
+        item: Dict[str, Any],
+        chunk_ids_int: List[int],
+        file_path: str,
+        folder_tag: str,
+        all_chroma_ids: List[str],
+        all_chroma_embs: List[List[float]],
+        all_chroma_metas: List[Dict[str, Any]],
+    ) -> None:
+        for chunk_id_int, chunk in zip(chunk_ids_int, item["chunks"]):
+            chunk_id = str(chunk_id_int)
+            all_chroma_ids.append(chunk_id)
+            all_chroma_embs.append(chunk["_embedding"])
+            all_chroma_metas.append({
+                "chunk_id": chunk_id,
+                "file_path": file_path,
+                "folder_tag": folder_tag,
+            })
+
+    @staticmethod
+    def _append_summary_item(
+        item: Dict[str, Any],
+        file_id: int,
+        file_path: str,
+        folder_tag: str,
+        summary_items: List[Dict[str, Any]],
+    ) -> None:
+        if not item.get("_summary_embedding"):
+            return
+        summary_items.append({
+            "doc_id": f"file_{file_id}",
+            "embedding": item["_summary_embedding"],
+            "metadata": {
+                "file_id": file_id,
+                "file_path": file_path,
+                "folder_tag": folder_tag,
+            },
+        })
+
+    async def _flush_chroma_batches(
+        self,
+        all_chroma_ids: List[str],
+        all_chroma_embs: List[List[float]],
+        all_chroma_metas: List[Dict[str, Any]],
+        summary_items: List[Dict[str, Any]],
+    ) -> None:
+        chroma_batch = 5000
+        for i in range(0, len(all_chroma_ids), chroma_batch):
+            end = min(i + chroma_batch, len(all_chroma_ids))
             await self.chroma_client.add_documents(
                 all_chroma_ids[i:end],
                 all_chroma_embs[i:end],
                 all_chroma_metas[i:end],
             )
 
-        # Batch summary upserts
         if summary_items:
             await self.chroma_client.add_summaries_batch(summary_items)
+
+    async def _generate_folder_profiles(
+        self,
+        all_files: List[Tuple[Path, str]],
+        folders: List[Path],
+    ) -> None:
+        """Build and store a profile for each indexed folder.
+
+        Profiles capture the *type* of project (Unreal, Python, etc.),
+        file counts, key project files, and directory structure.  These
+        are embedded in ChromaDB so retrieval can surface them for
+        project-level queries.
+        """
+        logger.info("Generating folder profiles for %d folder(s) …", len(folders))
+        profile_texts: List[str] = []
+        profiles: List[Dict[str, Any]] = []
+
+        loop = asyncio.get_running_loop()
+        for folder in folders:
+            try:
+                profile = await loop.run_in_executor(
+                    None, _build_folder_profile, folder, folder.name, all_files
+                )
+                profiles.append(profile)
+                profile_texts.append(profile["profile_text"])
+                await self.db.upsert_folder_profile(profile)
+            except Exception as e:
+                logger.error("Error generating profile for %s: %s", folder, e)
+
+        # Embed all profile texts and store in the summary collection
+        if profile_texts:
+            try:
+                embeddings = await self.embedding_service.embed_texts(profile_texts)
+                summary_items = []
+                for prof, emb in zip(profiles, embeddings):
+                    summary_items.append({
+                        "doc_id": f"folder_profile_{prof['folder_tag']}",
+                        "embedding": emb,
+                        "metadata": {
+                            "file_path": prof["folder_path"],
+                            "folder_tag": prof["folder_tag"],
+                            "project_type": prof["project_type"],
+                            "is_folder_profile": "true",
+                        },
+                    })
+                await self.chroma_client.add_summaries_batch(summary_items)
+                logger.info(
+                    "Stored %d folder profile(s): %s",
+                    len(profiles),
+                    [(p["folder_tag"], p["project_type"]) for p in profiles],
+                )
+            except Exception as e:
+                logger.error("Error embedding folder profiles: %s", e)
 
     def _extract_and_prepare(
         self, path: Path, folder_tag: str
@@ -530,6 +883,8 @@ class IndexingService:
         ".go", ".rb", ".html", ".css", ".xml", ".yaml", ".yml", ".toml",
         ".ini", ".cfg", ".sh", ".bat",
     })
+    _UNREAL_BINARY_EXTENSIONS = frozenset({".uasset", ".umap"})
+    _UNREAL_PROJECT_EXTENSIONS = frozenset({".uproject", ".uplugin"})
 
     def _extract_text(self, path: Path) -> str:
         """Text extraction for multiple file types.
@@ -550,7 +905,34 @@ class IndexingService:
         if ext in self._TEXT_EXTENSIONS:
             return self._extract_plain_text(path)
 
+        if ext in self._UNREAL_BINARY_EXTENSIONS:
+            return self._extract_unreal_asset_stub(path)
+
+        if ext in self._UNREAL_PROJECT_EXTENSIONS:
+            return self._extract_plain_text(path)
+
         return ""
+
+    @staticmethod
+    def _extract_unreal_asset_stub(path: Path) -> str:
+        """Return a lightweight textual stub for Unreal binary assets.
+
+        This keeps binary Unreal assets represented in the index so project-level
+        reasoning can use path/name/class signals even without binary parsing.
+        """
+        lower = str(path).lower().replace("\\", "/")
+        kind = "map" if path.suffix.lower() == ".umap" else "asset"
+        hint = ""
+        if any(seg in lower for seg in ["/maps/", "/levels/"]):
+            hint = " Environment/Level content."
+        elif any(seg in lower for seg in ["/characters/", "/player/", "/npc/"]):
+            hint = " Character-related content."
+        elif any(seg in lower for seg in ["/materials/", "/niagara/"]):
+            hint = " Rendering/VFX content."
+        return (
+            f"Unreal Engine binary {kind}: {path.name}. "
+            f"Path: {path}. Binary content not parsed directly.{hint}"
+        )
 
     @staticmethod
     def _extract_plain_text(path: Path) -> str:
