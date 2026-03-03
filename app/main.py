@@ -366,8 +366,6 @@ async def query(
     return results
 
 
-
-
 @app.post("/query/stream")
 async def query_stream(
     request: QueryRequest,
